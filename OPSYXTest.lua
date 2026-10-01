@@ -1,3 +1,227 @@
+--  SUITE V9.45.3-DEFENSIVE-STABLE - OPSYX  (FULL AUDIT / UI SAFE / VERTICAL ADVANCED SUITE) v1
+--  V9.45.3: defensive compatibility pass; safe-mode state preservation, input disarm, adaptive load control, and AC false-positive suppression.
+--  All V9.44.0 features retained. See changelog at bottom.
+--
+--  [NEW-9.45-1]  ANTI-CHEAT DETECTION MODULE (S.AC.acDetect): passive game-side
+--                anti-cheat heuristics. Monitors for unusual RemoteEvent firing
+--                rate spikes (flag storms), unexpected Touched/Hit callbacks on
+--                invisible kill-parts near the local character, and abnormal
+--                CFrame/Velocity writes that suggest server-authoritative bans.
+--                Detected events are logged to RUNTIME_LOG and displayed in the
+--                dashboard. S.AC.acDetectInterval controls the poll rate (default 3s).
+--  [NEW-9.45-2]  AC EVENT COUNTER + NOTIFY: ST.acEvents accumulates detection
+--                hits across the session. When the count crosses S.AC.acThreshold
+--                (default 5), the status dot turns red and notify() fires once.
+--  [FIX-9.45-A]  spectatorCheck: previous implementation counted characterless
+--                players unconditionally, flagging bots and waiting-to-spawn players
+--                as spectators. Now only counts players whose character is nil for
+--                longer than 8 seconds (ST._charNilSince tracks per-player onset).
+--  [FIX-9.45-B]  espCharacterState Health<=0 eviction path missed the HUM_CACHE
+--                write after a nil-eviction; a fresh FindFirstChildOfClass would
+--                immediately re-populate HUM_CACHE with the dead humanoid, silently
+--                undoing [FIX-9.44-G]. The fresh hum is now checked before caching.
+--  [FIX-9.45-C]  importClipboard (Advanced Suite) applied AM.md with a 5000-stud
+--                ceiling instead of the script-wide ESP_MAX_RANGE (1000), allowing
+--                a crafted config paste to bypass the range cap. Corrected to
+--                cl(tonumber(data.AM.md), 100, ESP_MAX_RANGE).
+--
+--  [FIX-9.44-A]  NEAREST_VISIBLE mode was identical to DISTANCE; now uses
+--                world-space distance after a mandatory LOS check (visibility
+--                actually matters in this mode).
+--  [FIX-9.44-B]  triggerbot sc() used tw() (task.wait) with a fixed 0.015s
+--                sleep inside a pcall-guarded tsp (task.spawn). On executors
+--                where tw is the legacy wait() the 0.015s cannot be honoured;
+--                replaced with the task.delay path so delay precision is
+--                preserved on all executor builds.
+--  [FIX-9.44-C]  copyConfig / exportFile / importClipboard serialised only
+--                one side of the config (V40 STATE or S.*) but not both
+--                consistently, causing round-trip drift on profile reload.
+--                Import now validates every numeric range with cl() to prevent
+--                malformed JSON from corrupting runtime state.
+--  [FIX-9.44-D]  FOV slider upper limit was hard-coded to 500 in the drag
+--                handler but S.FV.r had no upper-bound guard; aimbots could
+--                call findTarget with fovLimit=500 even when the displayed FOV
+--                was lower. Both ends now share ESP_MAX_RANGE as a ceiling and
+--                the slider clamp is applied at read-time.
+--  [FIX-9.44-E]  purgeStalePredCache was never called; LP table grew without
+--                bound on long sessions. Now wired into the existing LOSC sweep.
+--  [FIX-9.44-F]  Dashboard auto-update (RenderStepped) formatted FPS_SHOWN and
+--                #PLAYER_LIST from upvalues captured at construction time rather
+--                than reading the live values each frame. Fixed to reference the
+--                live globals.
+--  [FIX-9.44-G]  espCharacterState() returned stale valid=true when the
+--                humanoid's Health was 0 but HUM_CACHE still held the dead
+--                humanoid. Force-evict cache entry on Health <= 0.
+--  [FIX-9.44-H]  White-team symmetry: when BOTH players are on team White the
+--                old code set enemy=true (both players on no team treated as
+--                enemies of each other). A new S.AM.whiteAsEnemy toggle
+--                (default true) preserves the old fail-closed behavior while
+--                allowing users to flip it for FFA servers.
+--  [FIX-9.44-I]  refreshIgnorePanel sorted by dist when igSortNear=true but
+--                math.huge entries (offline/no-character players) sorted before
+--                real nearby players due to table.sort instability. Now pushes
+--                math.huge to the end explicitly.
+--  [FIX-9.44-J]  makeDraggable preserved AnchorPoint=(0,0) after first drag but
+--                layoutRightDock() resets AnchorPoint to (1,0) on each layout
+--                pass, fighting the dragged position. layoutRightDock now skips
+--                anchor reset for dragged panels.
+--
+--  [NEW-9.44-1]  AIM ASSIST STRENGTH slider (0.0-1.0) exposed in Advanced Suite
+--                Aimbot card. Scales the smoothing curve's output amplitude
+--                independently of S.AM.sm so users can tune "pull strength"
+--                without changing the feel of the smooth curve.
+--  [NEW-9.44-2]  TARGET HISTORY: last 5 locked targets stored in ST.targetHistory
+--                (name + time). Shown in dashboard and Advanced Suite diagnostics.
+--  [NEW-9.44-3]  ESP CHAMS (color-fill Highlights): when S.ES.highlight and
+--                S.ES.chamsFill=true the Highlight FillColor is set instead of
+--                left transparent, giving a solid-color "chams" appearance
+--                through walls when depthCheck is off.
+--  [NEW-9.44-4]  KILL STREAK COUNTER: ST.kills is now tracked and displayed in
+--                the dashboard when S.AC.ks (kill streak display) is enabled.
+--                Resets on death/respawn. Kill is detected by target HP reaching 0.
+--  [NEW-9.44-5]  QUICK-BIND panel: pressing any pill button for > 0.6s opens
+--                a mini rebind dialog for that feature's hotkey without opening
+--                the full settings panel.
+--  [NEW-9.44-6]  SPECTATOR DETECTION: detects when another player is spectating
+--                the local player via a character camera check and warns via
+--                notify() / status dot color change. Configurable interval.
+--  [NEW-9.44-7]  SMART JITTER: when S.AC.jitter=true and aimbot is firing,
+--                adds a randomised sub-pixel walk to the aim output that mimics
+--                natural micro-corrections without affecting average accuracy.
+--
+-- ============================================================
+
+-- ============================================================
+--  All fixes from V9.31 through V9.38 are fully retained.
+--  V9.37-LOWEND adds low-end CPU/memory optimizations on top of V9.36-COMPAT.
+--
+--  ============================================================
+--  V9.37.1-FIXED (applied by HackerAI code review):
+--  [FIX-9.37.1-A] ESP hot path team check was fail-OPEN:
+--    `local enemy = S.ES.tc and espTeamEnemyPass(pl) or true`
+--    evaluates to `true` whenever espTeamEnemyPass() returns false,
+--    so teammates were never invalidated (and were even colored as
+--    enemies). Now: `local enemy = true; if S.ES.tc then enemy =
+--    espTeamEnemyPass(pl) end` -- the claimed fail-closed behavior
+--    actually works.
+--  [FIX-9.37.1-B] InputBegan: `if gpd then return end` moved directly
+--    after the key-rebind (ST._rb) block so F5/F7/Ctrl+F8 and the
+--    F1-F4 feature hotkeys no longer fire on game-processed input.
+--    Order is now: rebind -> gpd -> RMB/LMB arming -> F7 -> Ctrl+F8
+--    -> F5 -> F1-F4 hotkeys.
+--  [FIX-9.37.1-C] refreshIgnorePanel 50 ms force-debounce now DEFERS a
+--    trailing rebuild instead of dropping the final call, so the last
+--    keystroke/scroll click always renders.
+--  [FIX-9.37.1-D] Drag release is now detected by a global
+--    UI.InputEnded hook keyed on the ACTIVE_DRAG input object.
+--    Per-drag InputObject.Changed release detection removed (pooled
+--    InputObjects do not reliably fire Changed; drags could stick).
+--  [FIX-9.37.1-E] HUM_CACHE entries are identity-checked
+--    (h.Parent == c) in al() and espCharacterState() so a replaced
+--    Humanoid inside the same character model cannot poison the cache.
+--  [FIX-9.37.1-F] Local `rs` UIStroke shadow in makeToggle renamed to
+--    `stroke` (removes shadowing of the rs() name generator).
+--  [FIX-9.37.1-G] Restore-bar docked offset clamped; setfpscap(0)
+--    normalized to 9999 to match the fps_unlock branch below it.
+--  ============================================================
+--
+--  V9.36-COMPAT additional cross-executor hardening:
+--  [COMPAT-1]  math.pow() -> ^ operator to avoid an unnecessary library call;
+--              the native Luau exponent operator is used for these hot paths.
+--  [COMPAT-2]  clearLOSCForChar(): two-pass pairs-safe deletion
+--              (Madium V2 and Fluxus pairs() instability on current-key nil)
+--  [COMPAT-3]  los(): RAY_FILTER[1] falls back to WS when ME.Character==nil
+--              (all executors during respawn; stricter on Madium V2/SynX)
+--  [COMPAT-4]  isEnemy(): TeamColor reads pcall-guarded (Madium V2, SynX,
+--              Script-Ware anti-cheat property hook protection)
+--  [COMPAT-5]  _G.__V94OPSYX_CL(): CHAR_CONNS/LP/CHARS two-pass cleanup
+--              (Madium V2, Fluxus pairs() safety)
+--  [COMPAT-6]  WaitForChild("PlayerGui") given 10s timeout in cg() and
+--              mobile UI block (Madium V2 early injection, Krnl, Fluxus)
+--  [COMPAT-7]  UI:GetFocusedTextBox() pcall-guarded in InputBegan handler
+--              (Synapse X legacy, Krnl older builds, Fluxus)
+--  [COMPAT-8]  GetAttribute() pcall-guarded in scroll button handlers
+--              (Synapse X legacy targets, Krnl older builds)
+--  [COMPAT-9]  RNG seed computation overflow-safe for 32-bit Luau builds
+--              (Krnl 32-bit, Fluxus 32-bit, older Madium V2)
+--  [COMPAT-10] Drawing probe calls removed; type() guard is sufficient
+--              (Madium V2 lazy Drawing init, Fluxus)
+--  [COMPAT-11] Dead code flushAimCache() removed
+--  [COMPAT-12] SetAttribute() calls pcall-guarded in refreshIgnorePanel
+--              (same older-client guard as GetAttribute)
+--  [FIX-UI-DRAG] Main / Ignore List / Settings / Mobile panels now support
+--              mouse + touch dragging with viewport clamping; responsive
+--              layout no longer snaps a manually moved panel back.
+--  [FIX-HOLD-AIM-IMMEDIATE] RMB hold latches `aiming = true` directly in
+--              InputBegan and clears it in InputEnded, removing RenderStepped activation delay.
+--  No webhook. No data collection. No outbound networking.
+--  [PERF-1] Responsive layout is state/viewport-gated instead of rewriting
+--           panel positions every RenderStepped on stable frames.
+--  [PERF-2] FOV slider consumes InputObject positions instead of polling the
+--           global mouse position every RenderStepped while dragging.
+--  [COMPAT-13] RaycastParams prefers ExcludeInstances with legacy fallback.
+--  [COMPAT-14] Mouse-helper capability now respects UI.MouseEnabled.
+--  [COMPAT-15] Raycast ExcludeInstances support is detected by a guarded write,
+--             preventing false-positive capability detection on older clients.
+--
+--  V9.37-LOWEND optimizations (low-end PC / low-power CPU focus):
+--  [PERF-3] forceWallCheck() removed from per-frame RenderStepped; moved to
+--           startup and ME.CharacterAdded. Was a no-op write every frame.
+--  [PERF-4] fr() (root-part finder) now uses PART_CACHE_ROOT as primary
+--           lookup, eliminating repeated FindFirstChild iterations in hot paths.
+--  [PERF-5] HUM_CACHE added: al() and ESP Humanoid lookups now cached per
+--           character, replacing FindFirstChildOfClass on every scan frame.
+--           Cache invalidated on character change, respawn, and removal.
+--  [PERF-6] FC.NumSides write removed from per-tick FOV update (was
+--           unconditionally writing 64 every tick; set once at init instead).
+--           HP color recomputed only when HP ratio changes (1% granularity),
+--           eliminating per-tick Color3 allocations when HP is stable.
+--  [PERF-7] All panel/slider UI.InputChanged connections consolidated into
+--           one shared handler (ACTIVE_DRAG). Previously 5 separate listeners
+--           all fired on every mouse-move event. Single dispatcher cuts that
+--           to one nil-check per mouse-move when no drag is active.
+--  [PERF-8] refreshIgnorePanel force-rebuilds debounced at 50 ms minimum.
+--           Prevents burst Instance alloc/destroy on rapid typing or scrolling.
+--  [PERF-9] LOSC (wall-check result cache) periodic stale-entry sweep added.
+--  [PERF-10] Root/head cache paths no longer return generic fallback parts when
+--            a real root/head exists; reduces repeated hierarchy searches.
+--  [FIX-ASYNC] Delayed callbacks carry a lifecycle token and self-cancel after unload.
+--           Entries older than 5s pruned every 10s to bound table growth on
+--           long sessions / high-player servers.
+--  [FIX-ESP-FILTER] ESP now enforces validity -> ignore -> team before any
+--           character/humanoid/root, distance, projection, or render work.
+--           Filtered players are removed immediately and cannot be recreated
+--           until they qualify again.
+--  [FIX-ESP-LIVE] Ignore-list changes, player Team/TeamColor changes, and
+--           LocalPlayer team changes immediately reconcile the ESP set.
+--  [FIX-ESP-RESPAWN] Respawn/player removal invalidates stale ESP and cache
+--           state so filtered players cannot resurrect old overlays.
+--  [FIX-ESP-CHAR-REMOVE] CharacterRemoving closes the death/respawn stale-ESP gap.
+--  [FIX-ESP-TEAM-FAILCLOSED] ESP team-check fails closed on protected TeamColor reads.
+--  [PERF-ESP-TEAMCACHE] ESP team relationships are cached and invalidated only
+--           on Team/TeamColor changes or player removal, eliminating repeated
+--           protected TeamColor reads from the periodic ESP hot path.
+--  [FIX-ESP-OWNERSHIP] ESP objects are generation/character-owned; stale or
+--           reparented overlays are rejected and rebuilt instead of reused.
+--  [HARDEN-ESP-INTEGRITY] ESP update path fails closed on ownership/team drift.
+--  [PERF-11] Player list is event-synchronized; hot paths no longer allocate
+--           a fresh Players:GetPlayers() array for scans/ESP/diagnostics.
+--  [PERF-12] Targeting team relations are cached and invalidated on team changes.
+--  [PERF-13] Prediction cache objects are updated in place to reduce GC churn.
+--  [PERF-14] FOV slider updates directly from InputChanged; no RenderStepped poll.
+--  [HARDEN-ESP-ROOT] ESP creation now receives the validated root/humanoid
+--                 instead of relying on an undeclared root reference.
+--  [FIX-ESP-VISIBILITY] VISIBILITY now clears Drawing extras as well as labels.
+--  [ADV-ESP] Smart culling, nearest-player cap, distance fade, graphical
+--           health bars, and Highlight depth mode are available as opt-in
+--           visual/performance mechanics.
+--  [PROTECT-UI-REPAIR] Detached OPSYX ScreenGui is repaired before escalation.
+--  [FIX-HOLD-RELEASE-GUARD] stale mouse state cannot re-arm after RMB release.
+--  [FIX-HOLD-TOGGLE] enabling hold-aim disables free-running normal aimbot.
+--  [FIX-TRIGGER-QUEUE] delayed trigger actions are single-flight, exception-safe,
+--           and lifecycle-safe.
+-- ============================================================
+
 -- ============================================================
 -- RE-EXECUTION GUARD
 -- If OPSYX is already running, unload the previous instance first
@@ -21,6 +245,7 @@ local Players = game:GetService("Players")
 local RS      = game:GetService("RunService")
 local UI      = game:GetService("UserInputService")
 local TS      = game:GetService("TweenService")
+local TextService = game:GetService("TextService")
 local HttpService = game:GetService("HttpService")
 local WS      = game:GetService("Workspace")
 local CG      = game:GetService("CoreGui")
@@ -528,7 +753,11 @@ local GUI = {
     igPanel=nil, igStatusLbl=nil, igSearch=nil, igSortBtn=nil,
     igContainer=nil, igUp=nil, igDown=nil, setPanel=nil, kbBtns=nil,
     mobilePanel=nil,
-    featureCenter=nil, featureStatus=nil,
+    featureCenter=nil, featureStatus=nil, featureCenterHint=nil,
+    featureCenterBody=nil, featureCenterCleanFooter=nil,
+    mainFeatureRows=nil, mainActionButtons=nil, mainScroll=nil, mainFooter=nil,
+    settingsBody=nil, settingsClose=nil,
+    dashboard=nil,
     v40BindBtns=nil,
 }
 local SI = {
@@ -536,6 +765,7 @@ local SI = {
 }
 
 local layoutRightDock
+local applyDraggedPanelPosition
 local cancelActiveDrag
 local v39WatchdogTick
 
@@ -2144,11 +2374,1046 @@ end)
 
 local LAYOUT_CACHE = {
     vw = 0, vh = 0, scale = 0,
+    compact = nil, spacing = nil, touch = nil,
     mainVisible = nil, ignoreVisible = nil, settingsVisible = nil,
     restoreVisible = nil, mobileExists = nil,
+    featureCenterVisible = nil, advancedSuiteVisible = nil,
     mainDragged = nil, ignoreDragged = nil, settingsDragged = nil,
-    mobileDragged = nil, restoreDragged = nil,
+    mobileDragged = nil, restoreDragged = nil, featureCenterDragged = nil,
+    advancedSuiteDragged = nil,
 }
+
+-- ============================================================
+-- CENTRAL UI LAYOUT / AUTO-SIZE API
+-- Content-driven sizing is deliberately kept separate from runtime feature
+-- state.  This API owns only UI geometry, viewport bounds, spacing, and
+-- content measurement.  Manual drag/resize state still lives in ST.*.
+--
+-- Performance policy:
+--   * event-driven refresh requests are coalesced with task.defer()
+--   * viewport/UI-scale changes are signature-gated
+--   * text measurement uses TextService only when a size must be recalculated
+--   * no permanent RenderStepped sizing loop is created
+-- ============================================================
+local UI_LAYOUT = {
+    panels = {},
+    queued = false,
+    dirty = true,
+    signature = "",
+    tweens = setmetatable({}, {__mode="k"}),
+    tweenTokens = setmetatable({}, {__mode="k"}),
+    registeredText = setmetatable({}, {__mode="k"}),
+    featureCenterReparented = false,
+    settingsReparented = false,
+    mobileBodyReady = false,
+    mainBodyReady = false,
+}
+
+function UI_LAYOUT.getScale()
+    local scale = 1
+    pcall(function() scale = tonumber(GUI.uiScale and GUI.uiScale.Scale) or 1 end)
+    if scale <= 0 or scale ~= scale or scale == math.huge or scale == -math.huge then
+        scale = 1
+    end
+    return scale
+end
+
+function UI_LAYOUT.getViewport()
+    local cam = CAM()
+    if not cam then return nil end
+    local vp = cam.ViewportSize
+    local scale = UI_LAYOUT.getScale()
+    local vw = math.max(1, tonumber(vp.X) or 1)
+    local vh = math.max(1, tonumber(vp.Y) or 1)
+    return {
+        pixelW = vw,
+        pixelH = vh,
+        width = vw / scale,
+        height = vh / scale,
+        scale = scale,
+        touch = MOB == true,
+        compact = S.V40.compactMode == true,
+        spacing = cl(tonumber(S.V40.uiSpacing) or 6, 2, 12),
+    }
+end
+
+function UI_LAYOUT.metrics()
+    local m = UI_LAYOUT.getViewport()
+    if not m then
+        m = {
+            pixelW = 1, pixelH = 1, width = 1, height = 1,
+            scale = UI_LAYOUT.getScale(), touch = MOB == true,
+            compact = S.V40.compactMode == true, spacing = 6,
+        }
+    end
+    m.gap = cl(m.spacing + (m.compact and -1 or 0), 2, 12)
+    m.touchMin = m.touch and 38 or 30
+    m.panelMargin = m.touch and 8 or 10
+    return m
+end
+
+function UI_LAYOUT.setSize(obj, w, h)
+    if not obj then return false end
+    w, h = math.max(1, math.floor((tonumber(w) or 1) + 0.5)),
+           math.max(1, math.floor((tonumber(h) or 1) + 0.5))
+    local curW, curH
+    pcall(function()
+        curW = obj.Size.X.Offset
+        curH = obj.Size.Y.Offset
+    end)
+    if curW == w and curH == h then return false end
+    pcall(function()
+        obj.Size = UDim2.fromOffset(w, h)
+    end)
+    return true
+end
+
+function UI_LAYOUT.ensureConstraint(obj, minW, minH, maxW, maxH)
+    if not obj then return nil end
+    local ok, constraint = pcall(function()
+        return obj:FindFirstChild("OPSYXAutoSizeConstraint")
+    end)
+    if not ok or not constraint then
+        constraint = Instance.new("UISizeConstraint")
+        constraint.Name = "OPSYXAutoSizeConstraint"
+        constraint.Parent = obj
+    end
+    pcall(function()
+        constraint.MinSize = Vector2.new(math.max(1, minW or 1), math.max(1, minH or 1))
+        constraint.MaxSize = Vector2.new(math.max(minW or 1, maxW or 1e6), math.max(minH or 1, maxH or 1e6))
+    end)
+    return constraint
+end
+
+function UI_LAYOUT.registerPanel(panel, key, minW, minH, maxW, maxH)
+    if not panel or not key then return end
+    UI_LAYOUT.panels[key] = {
+        panel=panel,
+        minW=math.max(80, tonumber(minW) or 180),
+        minH=math.max(60, tonumber(minH) or 90),
+        maxW=math.max(80, tonumber(maxW) or 1200),
+        maxH=math.max(60, tonumber(maxH) or 1000),
+    }
+    local rule = UI_LAYOUT.panels[key]
+    if rule.maxW < rule.minW then rule.maxW = rule.minW end
+    if rule.maxH < rule.minH then rule.maxH = rule.minH end
+    UI_LAYOUT.ensureConstraint(panel, rule.minW, rule.minH, rule.maxW, rule.maxH)
+end
+
+function UI_LAYOUT.savedWasResized(key)
+    local s = ST.uiSizes and ST.uiSizes[key]
+    return s and s.resized == true and tonumber(s.w) and tonumber(s.h)
+end
+
+function UI_LAYOUT.clampPanelState(key, viewport)
+    local rule = UI_LAYOUT.panels[key]
+    if not rule or not rule.panel or not rule.panel.Parent then return nil end
+    viewport = viewport or UI_LAYOUT.metrics()
+    local margin = viewport.panelMargin
+    local responsiveMinW = math.min(rule.minW, math.max(80, viewport.width - margin * 2))
+    local responsiveMinH = math.min(rule.minH, math.max(60, viewport.height - margin * 2))
+    local responsiveMaxW = math.min(rule.maxW, math.max(responsiveMinW, viewport.width - margin * 2))
+    local responsiveMaxH = math.min(rule.maxH, math.max(responsiveMinH, viewport.height - margin * 2))
+    if responsiveMaxW < responsiveMinW then responsiveMaxW = responsiveMinW end
+    if responsiveMaxH < responsiveMinH then responsiveMaxH = responsiveMinH end
+
+    UI_LAYOUT.ensureConstraint(
+        rule.panel, responsiveMinW, responsiveMinH, responsiveMaxW, responsiveMaxH
+    )
+
+    local saved = ST.uiSizes and ST.uiSizes[key]
+    if saved then
+        local sw = tonumber(saved.w)
+        local sh = tonumber(saved.h)
+        if sw and sh and sw == sw and sh == sh then
+            saved.w = cl(sw, responsiveMinW, responsiveMaxW)
+            saved.h = cl(sh, responsiveMinH, responsiveMaxH)
+            if saved.resized == true then
+                UI_LAYOUT.setSize(rule.panel, saved.w, saved.h)
+            end
+        end
+    end
+    return {
+        minW=responsiveMinW, minH=responsiveMinH,
+        maxW=responsiveMaxW, maxH=responsiveMaxH,
+    }
+end
+
+function UI_LAYOUT.measureTextHeight(obj, width, text, textSize, font)
+    if not obj and (not text or not textSize or not font) then return 0 end
+    local value = text
+    local size = textSize
+    local face = font
+    if obj then
+        pcall(function()
+            value = obj.Text
+            size = obj.TextSize
+            face = obj.Font
+        end)
+    end
+    value = tostring(value or "")
+    size = tonumber(size) or 10
+    if size <= 0 then size = 10 end
+    width = math.max(1, tonumber(width) or 1)
+    local measured = nil
+    pcall(function()
+        measured = TextService:GetTextSize(value, size, face or Enum.Font.Gotham, Vector2.new(width, 10000))
+    end)
+    local h = measured and tonumber(measured.Y) or size + 4
+    if h <= 0 then h = size + 4 end
+    return math.ceil(h)
+end
+
+function UI_LAYOUT.measureTextWidth(text, textSize, font)
+    text = tostring(text or "")
+    textSize = tonumber(textSize) or 10
+    local measured = nil
+    pcall(function()
+        measured = TextService:GetTextSize(text, textSize, font or Enum.Font.Gotham, Vector2.new(10000, 10000))
+    end)
+    local w = measured and tonumber(measured.X) or (#text * math.max(5, textSize * 0.55))
+    return math.ceil(math.max(1, w))
+end
+
+function UI_LAYOUT.fitTextWidth(obj, width, maxSize, minSize)
+    if not obj then return end
+    local top = math.max(1, math.floor(tonumber(maxSize) or tonumber(obj.TextSize) or 10))
+    local low = math.max(6, math.floor(tonumber(minSize) or 8))
+    local targetW = math.max(1, tonumber(width) or 1)
+    local chosen = top
+    for sz = top, low, -1 do
+        if UI_LAYOUT.measureTextWidth(obj.Text, sz, obj.Font) <= targetW then
+            chosen = sz
+            break
+        end
+    end
+    pcall(function() obj.TextSize = chosen end)
+end
+
+function UI_LAYOUT.applyTextAutoSize(obj, minHeight, maxHeight)
+    if not obj then return end
+    pcall(function()
+        obj.TextWrapped = true
+        obj.TextTruncate = Enum.TextTruncate.None
+        obj.AutomaticSize = Enum.AutomaticSize.Y
+        obj.Size = UDim2.new(obj.Size.X.Scale, obj.Size.X.Offset, 0, 0)
+        local h = math.max(0, tonumber(minHeight) or 0)
+        local c = obj:FindFirstChild("OPSYXTextSizeConstraint")
+        if not c then
+            c = Instance.new("UISizeConstraint")
+            c.Name = "OPSYXTextSizeConstraint"
+            c.Parent = obj
+        end
+        c.MinSize = Vector2.new(0, h)
+        c.MaxSize = Vector2.new(100000, math.max(h, tonumber(maxHeight) or 100000))
+    end)
+end
+
+function UI_LAYOUT.watchText(obj, callback)
+    if not obj or type(callback) ~= "function" then return nil end
+    if UI_LAYOUT.registeredText[obj] then return UI_LAYOUT.registeredText[obj] end
+    local conn = nil
+    pcall(function()
+        conn = obj:GetPropertyChangedSignal("Text"):Connect(function()
+            pcall(callback, obj)
+        end)
+    end)
+    UI_LAYOUT.registeredText[obj] = conn
+    return conn
+end
+
+function UI_LAYOUT.getPaddingY(container, defaultTop, defaultBottom)
+    local top, bottom = defaultTop or 0, defaultBottom or 0
+    pcall(function()
+        local pad = container and container:FindFirstChildOfClass("UIPadding")
+        if pad then
+            top = math.max(0, pad.PaddingTop.Offset) + math.max(0, pad.PaddingTop.Scale * container.AbsoluteSize.Y)
+            bottom = math.max(0, pad.PaddingBottom.Offset) + math.max(0, pad.PaddingBottom.Scale * container.AbsoluteSize.Y)
+        end
+    end)
+    return top, bottom
+end
+
+function UI_LAYOUT.layoutFootprint(container)
+    if not container then return 0, 0 end
+    local maxRight, maxBottom = 0, 0
+    pcall(function()
+        local base = container.AbsolutePosition
+        for _, child in ipairs(container:GetChildren()) do
+            if child:IsA("GuiObject") and child.Visible then
+                local pos = child.AbsolutePosition
+                local size = child.AbsoluteSize
+                maxRight = math.max(maxRight, (pos.X - base.X) + size.X)
+                maxBottom = math.max(maxBottom, (pos.Y - base.Y) + size.Y)
+            end
+        end
+    end)
+    return maxRight, maxBottom
+end
+
+function UI_LAYOUT.refreshScrollCanvas(scroll, explicitHeight)
+    if not scroll or not scroll.Parent then return end
+    pcall(function()
+        if explicitHeight then
+            scroll.AutomaticCanvasSize = Enum.AutomaticSize.None
+            scroll.CanvasSize = UDim2.new(0, 0, 0, math.max(0, explicitHeight))
+        elseif scroll:FindFirstChildOfClass("UIListLayout") then
+            scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+        else
+            local _, h = UI_LAYOUT.layoutFootprint(scroll)
+            scroll.AutomaticCanvasSize = Enum.AutomaticSize.None
+            scroll.CanvasSize = UDim2.new(0, 0, 0, math.max(0, h + 8))
+        end
+    end)
+end
+
+function UI_LAYOUT.tweenHeight(obj, targetHeight, duration, restoreAutomaticSize)
+    if not obj or not obj.Parent then return end
+    restoreAutomaticSize = restoreAutomaticSize ~= false
+    targetHeight = math.max(1, math.floor((tonumber(targetHeight) or obj.Size.Y.Offset or 1) + 0.5))
+    local current = math.max(1, tonumber(obj.Size.Y.Offset) or tonumber(obj.AbsoluteSize.Y) or targetHeight)
+    current = math.max(1, tonumber(obj.AbsoluteSize.Y) or current)
+    if math.abs(current - targetHeight) < 1 then
+        if restoreAutomaticSize then
+            pcall(function()
+                obj.AutomaticSize = Enum.AutomaticSize.Y
+                obj.Size = UDim2.new(obj.Size.X.Scale, obj.Size.X.Offset, 0, 0)
+            end)
+        else
+            pcall(function()
+                obj.AutomaticSize = Enum.AutomaticSize.None
+                obj.Size = UDim2.new(obj.Size.X.Scale, obj.Size.X.Offset, 0, targetHeight)
+            end)
+        end
+        return
+    end
+    local token = (UI_LAYOUT.tweenTokens[obj] or 0) + 1
+    UI_LAYOUT.tweenTokens[obj] = token
+    pcall(function()
+        if UI_LAYOUT.tweens[obj] then UI_LAYOUT.tweens[obj]:Cancel() end
+    end)
+    -- AutomaticSize keeps Size.Y.Offset at zero, so use AbsoluteSize for the
+    -- current visual height before temporarily switching to manual tweening.
+    current = math.max(1, tonumber(obj.AbsoluteSize.Y) or current)
+    pcall(function()
+        obj.AutomaticSize = Enum.AutomaticSize.None
+        obj.Size = UDim2.new(obj.Size.X.Scale, obj.Size.X.Offset, 0, current)
+    end)
+    local ok, twObj = pcall(function()
+        return TS:Create(
+            obj,
+            TweenInfo.new(duration or 0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+            {Size=UDim2.new(obj.Size.X.Scale, obj.Size.X.Offset, 0, targetHeight)}
+        )
+    end)
+    if not ok or not twObj then
+        pcall(function()
+            obj.Size = UDim2.new(obj.Size.X.Scale, obj.Size.X.Offset, 0, targetHeight)
+            if restoreAutomaticSize then
+                obj.AutomaticSize = Enum.AutomaticSize.Y
+                obj.Size = UDim2.new(obj.Size.X.Scale, obj.Size.X.Offset, 0, 0)
+            end
+        end)
+        return
+    end
+    UI_LAYOUT.tweens[obj] = twObj
+    twObj:Play()
+    pcall(function()
+        twObj.Completed:Connect(function()
+            if UI_LAYOUT.tweenTokens[obj] ~= token or not obj.Parent then return end
+            UI_LAYOUT.tweens[obj] = nil
+            if restoreAutomaticSize then
+                pcall(function()
+                    obj.AutomaticSize = Enum.AutomaticSize.Y
+                    obj.Size = UDim2.new(obj.Size.X.Scale, obj.Size.X.Offset, 0, 0)
+                end)
+            end
+        end)
+    end)
+end
+
+function UI_LAYOUT.refreshCardSize(card, animate)
+    if not card or not card.Parent then return end
+    local layout = card:FindFirstChildOfClass("UIListLayout")
+    if not layout then return end
+    local top, bottom = UI_LAYOUT.getPaddingY(card, 6, 6)
+    local target = math.max(34, (tonumber(layout.AbsoluteContentSize.Y) or 0) + top + bottom)
+    pcall(function()
+        card.AutomaticSize = Enum.AutomaticSize.Y
+    end)
+    if animate then
+        UI_LAYOUT.tweenHeight(card, target, 0.13)
+    else
+        pcall(function()
+            card.AutomaticSize = Enum.AutomaticSize.None
+            card.Size = UDim2.new(card.Size.X.Scale, card.Size.X.Offset, 0, target)
+            card.AutomaticSize = Enum.AutomaticSize.Y
+            card.Size = UDim2.new(card.Size.X.Scale, card.Size.X.Offset, 0, 0)
+        end)
+    end
+end
+
+function UI_LAYOUT.refreshAllCardSizes()
+    local suite = GUI.advancedSuite
+    if not suite then return end
+    for _, obj in ipairs(suite:GetDescendants()) do
+        if obj:IsA("Frame") and obj:GetAttribute("OPSYXSectionOrder") ~= nil then
+            pcall(UI_LAYOUT.refreshCardSize, obj, false)
+        end
+    end
+end
+
+function UI_LAYOUT.markDirty()
+    UI_LAYOUT.dirty = true
+end
+
+function UI_LAYOUT.queue(reason)
+    UI_LAYOUT.dirty = true
+    if UI_LAYOUT.queued then return end
+    UI_LAYOUT.queued = true
+    tdf(function()
+        UI_LAYOUT.queued = false
+        if not ST.ld then return end
+        if layoutRightDock then
+            pcall(layoutRightDock, true)
+        end
+    end)
+end
+
+local function isAutoSizedPanel(key)
+    local saved = ST.uiSizes and ST.uiSizes[key]
+    return not (saved and saved.resized == true)
+end
+
+function UI_LAYOUT.refreshMainDeck()
+    local main = GUI.main
+    local body = GUI.mainScroll
+    local rows = GUI.mainFeatureRows
+    local actions = GUI.mainActionButtons
+    if not main or not body or not rows or not actions then return end
+
+    local m = UI_LAYOUT.metrics()
+    local saved = ST.uiSizes and ST.uiSizes.main
+    local autoWidth = not (saved and saved.resized == true)
+    if autoWidth then
+        local desired = m.compact and 500 or 560
+        desired = math.min(desired, math.max(240, m.width - m.panelMargin * 2))
+        UI_LAYOUT.setSize(main, desired, main.Size.Y.Offset)
+    end
+
+    local panelW = math.max(220, main.Size.X.Offset)
+    local wbtn = MOB and 30 or 22
+    local rightReserve = wbtn * 2 + 24
+    local title = main:FindFirstChild("OPSYXMainTitle")
+    local status = main:FindFirstChild("OPSYXMainStatus")
+    local headerW = math.max(80, panelW - rightReserve - 42)
+    local headerH = 56
+    if title then
+        local th = math.max(18, UI_LAYOUT.measureTextHeight(title, headerW, title.Text, title.TextSize, title.Font))
+        th = math.min(32, th)
+        title.Size = UDim2.new(0, headerW, 0, th)
+        title.Position = UDim2.new(0,33,0,8)
+    end
+    if status then
+        local titleH = title and title.Size.Y.Offset or 20
+        local sh = math.max(12, UI_LAYOUT.measureTextHeight(status, headerW, status.Text, status.TextSize, status.Font))
+        sh = math.min(24, sh)
+        status.Size = UDim2.new(0, headerW, 0, sh)
+        status.Position = UDim2.new(0,33,0,8+titleH)
+        headerH = math.max(56, math.ceil(8 + titleH + sh + 8))
+    end
+    local gap = cl(m.gap, 3, 10)
+    local bodyW = math.max(160, panelW - 16)
+
+    local cardMinW = m.touch and 92 or (m.compact and 78 or 70)
+    local cols = cl(math.floor((bodyW + gap) / (cardMinW + gap)), 1, 7)
+    local cardW = math.max(cardMinW, math.floor((bodyW - (cols - 1) * gap) / cols))
+    if cols > 1 then
+        cardW = math.floor((bodyW - (cols - 1) * gap) / cols)
+    end
+
+    local y = 4
+    local rowHeights = {}
+    for i = 1, #rows do
+        local row = rows[i]
+        if row and row.Parent then
+            local label = row:FindFirstChild("OPSYXMainCardLabel")
+            local text = label and label.Text or ""
+            local labelH = math.max(18, UI_LAYOUT.measureTextHeight(label, math.max(10, cardW - 12), text, 10, Enum.Font.GothamBold))
+            local pill = row:FindFirstChild("OPSYXMainPill")
+            local pillH = m.touch and 20 or 18
+            if pill then pillH = math.max(pillH, pill.Size.Y.Offset) end
+            local h = math.max(m.touch and 46 or 42, 6 + labelH + gap + pillH + 6)
+            rowHeights[i] = h
+        end
+    end
+
+    local featureRows = math.ceil(#rows / cols)
+    local featureY = y
+    local featureBottom = y
+    for r = 1, featureRows do
+        local maxH = m.touch and 46 or 42
+        for i = (r-1)*cols+1, math.min(#rows, r*cols) do
+            maxH = math.max(maxH, rowHeights[i] or maxH)
+        end
+        for i = (r-1)*cols+1, math.min(#rows, r*cols) do
+            local row = rows[i]
+            if row and row.Parent then
+                local col = (i-1) % cols
+                local slotX = math.floor((bodyW - (cols * cardW + (cols - 1) * gap)) * 0.5 + 0.5)
+                slotX = math.max(0, slotX)
+                local yPos = featureY
+                row.Size = UDim2.fromOffset(cardW, maxH)
+                row.Position = UDim2.fromOffset(slotX + col * (cardW + gap), yPos)
+                local label = row:FindFirstChild("OPSYXMainCardLabel")
+                local pill = row:FindFirstChild("OPSYXMainPill")
+                if label then
+                    local pillH = pill and (m.touch and 20 or 18) or 0
+                    label.Size = UDim2.new(1, -12, 0, math.max(18, maxH - pillH - 16))
+                    label.Position = UDim2.new(0, 6, 0, 4)
+                    label.TextWrapped = true
+                    label.TextYAlignment = Enum.TextYAlignment.Center
+                end
+                if pill then
+                    pill.Size = UDim2.new(1, -12, 0, m.touch and 20 or 18)
+                    pill.Position = UDim2.new(0, 6, 1, -(m.touch and 24 or 22))
+                    pill.TextWrapped = false
+                end
+            end
+        end
+        featureBottom = featureY + maxH
+        featureY = featureBottom + gap
+    end
+
+    local actionCols = cl(math.floor((bodyW + gap) / ((m.touch and 140 or 126) + gap)), 1, 4)
+    if actionCols < 1 then actionCols = 1 end
+    local actionW = math.floor((bodyW - (actionCols - 1) * gap) / actionCols)
+    actionW = math.max(m.touch and 120 or 104, actionW)
+    local actionY = featureBottom + gap
+    local actionRowHeights = {}
+    for i = 1, #actions do
+        local b = actions[i]
+        if b and b.Parent then
+            local h = math.max(m.touch and 44 or 40,
+                UI_LAYOUT.measureTextHeight(b, math.max(10, actionW - 18), b.Text, b.TextSize, b.Font) + 14)
+            actionRowHeights[i] = h
+        end
+    end
+    local actionRows = math.ceil(#actions / actionCols)
+    local actionBottom = actionY
+    for r = 1, actionRows do
+        local maxH = m.touch and 44 or 40
+        for i=(r-1)*actionCols+1, math.min(#actions,r*actionCols) do
+            maxH = math.max(maxH, actionRowHeights[i] or maxH)
+        end
+        for i=(r-1)*actionCols+1, math.min(#actions,r*actionCols) do
+            local b = actions[i]
+            if b and b.Parent then
+                local col = (i-1) % actionCols
+                local slotX = math.max(0, math.floor((bodyW - (actionCols * actionW + (actionCols - 1) * gap)) * 0.5 + 0.5))
+                b.Size = UDim2.fromOffset(actionW, maxH)
+                b.Position = UDim2.fromOffset(slotX + col * (actionW + gap), actionY + (r-1) * (maxH + gap))
+                b.TextWrapped = true
+                b.TextYAlignment = Enum.TextYAlignment.Center
+            end
+        end
+        actionBottom = actionY + r * maxH + (r-1) * gap
+    end
+
+    local footer = GUI.mainFooter
+    local footerY = actionBottom + gap
+    local footerH = footer and math.max(18, UI_LAYOUT.measureTextHeight(footer, bodyW, footer.Text, footer.TextSize, footer.Font) + 2) or 18
+    if footer then
+        footer.Size = UDim2.new(1, -8, 0, footerH)
+        footer.Position = UDim2.fromOffset(4, footerY)
+        footer.TextWrapped = true
+    end
+
+    local contentH = footerY + footerH + 6
+    body.Position = UDim2.new(0, 10, 0, headerH)
+    body.Size = UDim2.new(1, -20, 1, -(headerH + 12))
+    pcall(function()
+        body.CanvasSize = UDim2.new(0, 0, 0, contentH)
+        body.AutomaticCanvasSize = Enum.AutomaticSize.None
+        body.ScrollingDirection = Enum.ScrollingDirection.Y
+    end)
+
+    if autoWidth then
+        local targetH = cl(headerH + contentH + 8, 130, math.max(130, m.height - m.panelMargin * 2))
+        UI_LAYOUT.setSize(main, main.Size.X.Offset, targetH)
+    end
+end
+
+function UI_LAYOUT.refreshIgnorePanelGeometry()
+    local p = GUI.igPanel
+    if not p then return end
+    local m = UI_LAYOUT.metrics()
+    local saved = ST.uiSizes and ST.uiSizes.ignore
+    if not (saved and saved.resized == true) then
+        local desiredH = cl(524, 300, math.max(300, m.height - m.panelMargin * 2))
+        UI_LAYOUT.setSize(p, math.min(p.Size.X.Offset, math.max(220, m.width - 40)), desiredH)
+    end
+    local container = GUI.igContainer
+    if container then
+        local ch = math.max(120, p.Size.Y.Offset - 167)
+        container.Size = UDim2.new(1, -10, 0, ch)
+        container.Position = UDim2.new(0, 5, 0, 95)
+    end
+    if GUI.igTitle then
+        UI_LAYOUT.applyTextAutoSize(GUI.igTitle, 22, 40)
+    end
+    if GUI.igStatusLbl then
+        UI_LAYOUT.applyTextAutoSize(GUI.igStatusLbl, 16, 40)
+    end
+end
+
+function UI_LAYOUT.ensureSettingsBody()
+    local p = GUI.setPanel
+    if not p or not p.Parent or UI_LAYOUT.settingsReparented then return GUI.settingsBody end
+    local body = Instance.new("ScrollingFrame")
+    body.Name = "OPSYXSettingsBody"
+    body.BackgroundTransparency = 1
+    body.BorderSizePixel = 0
+    body.ScrollBarThickness = 4
+    body.Active = true
+    body.ScrollingDirection = Enum.ScrollingDirection.Y
+    body.Position = UDim2.new(0, 6, 0, 34)
+    body.Size = UDim2.new(1, -12, 1, -70)
+    body.AutomaticCanvasSize = Enum.AutomaticSize.None
+    body.CanvasSize = UDim2.new(0,0,0,0)
+    body.ZIndex = p.ZIndex + 1
+    body.Parent = p
+    GUI.settingsBody = body
+
+    local title = nil
+    local accent = nil
+    local close = nil
+    for _, child in ipairs(p:GetChildren()) do
+        if child:IsA("TextLabel") and child.Text == "SETTINGS" then
+            title = child
+        elseif child:IsA("Frame") and child.Size.Y.Offset == 1 and child.Position.Y.Offset == 28 then
+            accent = child
+        elseif child:IsA("TextButton") and child.Text == "CLOSE" then
+            close = child
+        end
+    end
+    GUI.settingsClose = close
+
+    local moved = {}
+    for _, child in ipairs(p:GetChildren()) do
+        if child:IsA("GuiObject") and child ~= title and child ~= accent and child ~= close and child ~= body then
+            moved[#moved+1] = child
+        end
+    end
+    for i=1,#moved do
+        local child=moved[i]
+        local y=0
+        pcall(function() y = child.Position.Y.Offset end)
+        pcall(function()
+            child.Parent = body
+            child.Position = UDim2.new(child.Position.X.Scale, child.Position.X.Offset, child.Position.Y.Scale, math.max(0, y - 34))
+        end)
+    end
+    UI_LAYOUT.settingsReparented = true
+    return body
+end
+
+function UI_LAYOUT.refreshSettingsPanel()
+    local p = GUI.setPanel
+    if not p then return end
+    local body = UI_LAYOUT.ensureSettingsBody()
+    if not body then return end
+    local m = UI_LAYOUT.metrics()
+    local bodyW = math.max(160, p.Size.X.Offset - 24)
+    local labelW = cl(math.floor(bodyW * 0.40), 90, math.max(90, bodyW - 120))
+    local valueX = labelW + 8
+    local valueW = math.max(90, bodyW - valueX - 2)
+    local maxBottom = 0
+    for _, child in ipairs(body:GetChildren()) do
+        if child:IsA("GuiObject") and child.Visible then
+            local role = nil
+            pcall(function() role = child:GetAttribute("OPSYXSettingsRole") end)
+            if role == "label" then
+                child.Size = UDim2.new(0, labelW, child.Size.Y.Scale, math.max(child.Size.Y.Offset, m.touch and 30 or 26))
+                child.Position = UDim2.new(0, 6, child.Position.Y.Scale, child.Position.Y.Offset)
+                child.TextWrapped = true
+                child.TextYAlignment = Enum.TextYAlignment.Center
+            elseif role == "value" then
+                child.Size = UDim2.new(0, valueW, child.Size.Y.Scale, math.max(child.Size.Y.Offset, m.touch and 30 or 26))
+                child.Position = UDim2.new(0, valueX, child.Position.Y.Scale, child.Position.Y.Offset)
+                if child:IsA("TextButton") or child:IsA("TextLabel") then
+                    child.TextWrapped = true
+                    child.TextYAlignment = Enum.TextYAlignment.Center
+                end
+            elseif role == "full" then
+                child.Size = UDim2.new(1, -12, child.Size.Y.Scale, child.Size.Y.Offset)
+                child.Position = UDim2.new(0, 6, child.Position.Y.Scale, child.Position.Y.Offset)
+                if child:IsA("TextLabel") or child:IsA("TextButton") then
+                    child.TextWrapped = true
+                end
+            end
+            local bottom = child.Position.Y.Offset + child.Size.Y.Offset
+            maxBottom = math.max(maxBottom, bottom)
+        end
+    end
+    local sl = nil
+    local fovLbl = nil
+    local colorBtn = nil
+    for _, child in ipairs(body:GetChildren()) do
+        local role = nil
+        pcall(function() role = child:GetAttribute("OPSYXSettingsRole") end)
+        if role == "slider" then sl=child
+        elseif role == "fovlabel" then fovLbl=child
+        elseif role == "fovcolor" then colorBtn=child
+        end
+    end
+    if fovLbl then
+        fovLbl.Size = UDim2.new(1,-12,0,24)
+        fovLbl.Position = UDim2.new(0,6,0,fovLbl.Position.Y.Offset)
+        fovLbl.TextWrapped=true
+    end
+    if sl then
+        sl.Size = UDim2.new(1,-12,0,6)
+        sl.Position = UDim2.new(0,6,0,sl.Position.Y.Offset)
+    end
+    if colorBtn then
+        colorBtn.Size = UDim2.new(0, math.min(150, math.max(110, bodyW - 12)), 0, m.touch and 32 or 26)
+        colorBtn.Position = UDim2.new(0,6,0,colorBtn.Position.Y.Offset)
+    end
+    for _, child in ipairs(body:GetChildren()) do
+        if child:IsA("GuiObject") and child.Visible then
+            maxBottom = math.max(maxBottom, child.Position.Y.Offset + child.Size.Y.Offset)
+        end
+    end
+    body.CanvasSize = UDim2.new(0,0,0,maxBottom+8)
+    body.AutomaticCanvasSize = Enum.AutomaticSize.None
+
+    local saved = ST.uiSizes and ST.uiSizes.settings
+    if not (saved and saved.resized == true) then
+        local targetH = cl(maxBottom + 34 + 42, 300, math.max(300, m.height - m.panelMargin*2))
+        UI_LAYOUT.setSize(p, math.min(p.Size.X.Offset, math.max(260, m.width - 24)), targetH)
+    end
+    if GUI.settingsClose then
+        GUI.settingsClose.Size = UDim2.new(0, math.max(72, math.min(110, p.Size.X.Offset - 30)), 0, m.touch and 30 or 24)
+        GUI.settingsClose.Position = UDim2.new(0.5, -(GUI.settingsClose.Size.X.Offset/2), 1, -(GUI.settingsClose.Size.Y.Offset + 8))
+    end
+    body.Size = UDim2.new(1,-12,1,-(GUI.settingsClose and GUI.settingsClose.Size.Y.Offset + 48 or 70))
+    UI_LAYOUT.refreshScrollCanvas(body, maxBottom+8)
+end
+
+function UI_LAYOUT.ensureFeatureCenterBody()
+    local p = GUI.featureCenter
+    if not p or not p.Parent or UI_LAYOUT.featureCenterReparented then return GUI.featureCenterBody end
+    local body = Instance.new("ScrollingFrame")
+    body.Name = "OPSYXFeatureCenterBody"
+    body.BackgroundTransparency = 1
+    body.BorderSizePixel = 0
+    body.ScrollBarThickness = 4
+    body.Active = true
+    body.ScrollingDirection = Enum.ScrollingDirection.Y
+    body.AutomaticCanvasSize = Enum.AutomaticSize.None
+    body.CanvasSize = UDim2.new(0,0,0,0)
+    body.Position = UDim2.new(0, 8, 0, 108)
+    body.Size = UDim2.new(1, -16, 1, -168)
+    body.ZIndex = p.ZIndex + 1
+    body.Parent = p
+    GUI.featureCenterBody = body
+
+    local move = {}
+    for _, child in ipairs(p:GetChildren()) do
+        local owns = false
+        pcall(function() owns = child:GetAttribute("OPSYXFCButton") == true end)
+        if owns then move[#move+1] = child end
+    end
+    table.sort(move, function(a,b)
+        local aa = tonumber(a:GetAttribute("OPSYXFCOrder")) or 0
+        local bb = tonumber(b:GetAttribute("OPSYXFCOrder")) or 0
+        return aa < bb
+    end)
+    for i=1,#move do
+        move[i].Parent = body
+    end
+    UI_LAYOUT.featureCenterReparented = true
+    return body
+end
+
+function UI_LAYOUT.refreshFeatureCenter()
+    local p = GUI.featureCenter
+    if not p then return end
+    local body = UI_LAYOUT.ensureFeatureCenterBody()
+    if not body then return end
+    local m = UI_LAYOUT.metrics()
+    local saved = ST.uiSizes and ST.uiSizes.featureCenter
+    if not (saved and saved.resized == true) then
+        local desiredW = cl(580, 280, math.max(280, m.width - m.panelMargin*2))
+        UI_LAYOUT.setSize(p, desiredW, p.Size.Y.Offset)
+    end
+
+    local panelW = math.max(280, p.Size.X.Offset)
+    local gap = cl(m.gap, 4, 8)
+    local status = p:FindFirstChild("OPSYXFeatureCenterStatus")
+    local statusH = status and math.max(28, UI_LAYOUT.measureTextHeight(status, math.max(120, panelW-20),
+        status.Text, status.TextSize, status.Font) + 10) or 70
+    if status then
+        status.Size = UDim2.new(1,-20,0,statusH)
+        status.Position = UDim2.new(0,10,0,34)
+    end
+    local bodyTop = 34 + statusH + 8
+    local bodyW = math.max(180, panelW - 16)
+    local minW = m.touch and 118 or 108
+    local cols = cl(math.floor((bodyW + gap)/(minW + gap)), 1, 3)
+    local bw = math.floor((bodyW-(cols-1)*gap)/cols)
+    local y = 0
+    local children = {}
+    for _, child in ipairs(body:GetChildren()) do
+        if child:IsA("TextButton") and child:GetAttribute("OPSYXFCButton") == true then
+            children[#children+1] = child
+        end
+    end
+    table.sort(children, function(a,b)
+        return (tonumber(a:GetAttribute("OPSYXFCOrder")) or 0) < (tonumber(b:GetAttribute("OPSYXFCOrder")) or 0)
+    end)
+    local count=0
+    local rowMaxH=0
+    for i=1,#children do
+        local b=children[i]
+        local h=math.max(m.touch and 36 or 30,
+            UI_LAYOUT.measureTextHeight(b, math.max(10,bw-16), b.Text, b.TextSize, b.Font)+12)
+        if (i-1)%cols==0 then rowMaxH=h else rowMaxH=math.max(rowMaxH,h) end
+        local col=(i-1)%cols
+        local row=math.floor((i-1)/cols)
+        if col==0 and i>1 then
+            y=y+rowMaxH+gap
+            rowMaxH=h
+        elseif col==0 then
+            y=0
+        end
+        b.Size=UDim2.fromOffset(bw,h)
+        b.Position=UDim2.fromOffset(col*(bw+gap), y)
+        b.TextWrapped=true
+        b.TextYAlignment=Enum.TextYAlignment.Center
+        b.TextXAlignment=Enum.TextXAlignment.Center
+        b.AutoButtonColor=false
+        count=i
+    end
+    local canvasH = count > 0 and (y+rowMaxH+8) or 8
+    body.CanvasSize=UDim2.new(0,0,0,canvasH)
+    body.AutomaticCanvasSize=Enum.AutomaticSize.None
+
+    local footer = GUI.featureCenterCleanFooter
+    local hint = GUI.featureCenterHint
+    local footerH = 18
+    local hintH = hint and math.max(34, UI_LAYOUT.measureTextHeight(hint, math.max(100,panelW-24), hint.Text, hint.TextSize, hint.Font)+3) or 0
+    local visibleBodyH = math.min(canvasH, math.max(120, m.height - 195))
+    body.Position = UDim2.new(0,8,0,bodyTop)
+    body.Size = UDim2.new(1,-16,0,visibleBodyH)
+
+    if footer then
+        footer.TextWrapped=true
+        footer.TextYAlignment=Enum.TextYAlignment.Top
+        footer.Size=UDim2.new(1,-36,0,footerH)
+        footer.Position=UDim2.new(0,18,1,-(footerH+hintH+10))
+    end
+    if hint then
+        hint.TextWrapped=true
+        hint.Size=UDim2.new(1,-24,0,hintH)
+        hint.Position=UDim2.new(0,12,1,-(hintH+7))
+    end
+
+    if not (saved and saved.resized == true) then
+        local targetH=cl(bodyTop+visibleBodyH+hintH+footerH+30,330,math.max(330,m.height-m.panelMargin*2))
+        UI_LAYOUT.setSize(p,p.Size.X.Offset,targetH)
+    end
+    body.Size=UDim2.new(1,-16,0,math.max(110,p.Size.Y.Offset-bodyTop-footerH-hintH-18))
+    UI_LAYOUT.refreshScrollCanvas(body, canvasH+8)
+end
+
+function UI_LAYOUT.refreshMobilePanel()
+    local p=GUI.mobilePanel
+    if not p then return end
+    local body=GUI.mobileBody
+    if not body then return end
+    local m=UI_LAYOUT.metrics()
+    local saved=ST.uiSizes and ST.uiSizes.mobile
+    local panelW = math.max(150, p.Size.X.Offset)
+    local maxPanelW = math.min(420, math.max(150, m.width - 16))
+    if not(saved and saved.resized==true) then
+        panelW = cl(190, 150, maxPanelW)
+        UI_LAYOUT.setSize(p, panelW, math.max(250, p.Size.Y.Offset), false)
+    else
+        panelW = cl(panelW, 150, maxPanelW)
+        if panelW ~= p.Size.X.Offset then
+            UI_LAYOUT.setSize(p, panelW, p.Size.Y.Offset, false)
+        end
+    end
+    local bodyW = math.max(110, panelW - 8)
+    local pillW = m.touch and 62 or 54
+    local gap = cl(m.gap + 1, 5, 10)
+    local y = 4
+    local rows = {}
+    local fallbackOrder = 0
+    for _, child in ipairs(body:GetChildren()) do
+        if child:IsA("GuiObject") and child:GetAttribute("OPSYSMobileRow") == true then
+            fallbackOrder += 1
+            if child.LayoutOrder == 0 then
+                child.LayoutOrder = fallbackOrder
+            end
+            rows[#rows+1] = child
+        end
+    end
+    table.sort(rows, function(a,b)
+        if a.LayoutOrder == b.LayoutOrder then
+            return a.Name < b.Name
+        end
+        return (a.LayoutOrder or 0) < (b.LayoutOrder or 0)
+    end)
+    for i=1,#rows do
+        local row = rows[i]
+        local label = row:FindFirstChildOfClass("TextLabel")
+        local pill = row:FindFirstChild("OPSYSMobilePill")
+        local labelW = math.max(70, bodyW - pillW - 18)
+        local labelH = label and UI_LAYOUT.measureTextHeight(label, labelW - 4, label.Text, label.TextSize, label.Font) or 18
+        local rowH = math.max(m.touch and 40 or 34, labelH + 10)
+        row.Size = UDim2.new(1,-8,0,rowH)
+        row.Position = UDim2.new(0,4,0,y)
+        if label then
+            label.Size = UDim2.new(0,labelW,1,0)
+            label.Position = UDim2.new(0,6,0,0)
+            label.TextWrapped = true
+            label.TextYAlignment = Enum.TextYAlignment.Center
+            UI_LAYOUT.fitTextWidth(label, math.max(30,labelW-4), 11, 9)
+        end
+        if pill then
+            local ph = math.min(rowH-8, m.touch and 26 or 24)
+            pill.Size = UDim2.fromOffset(pillW, math.max(22,ph))
+            pill.Position = UDim2.new(1,-(pillW+6),0.5,-pill.Size.Y.Offset/2)
+        end
+        y = y + rowH + gap
+    end
+    local bodyH = math.max(0, y - gap + 4)
+    local maxPanelH = math.max(250, m.height-16)
+    if not(saved and saved.resized==true) then
+        UI_LAYOUT.setSize(p,p.Size.X.Offset,cl(bodyH+58,250,maxPanelH))
+    end
+    body.Size=UDim2.new(1,-8,1,-58)
+    body.CanvasSize=UDim2.new(0,0,0,math.max(bodyH+8,body.AbsoluteSize.Y))
+    body.AutomaticCanvasSize=Enum.AutomaticSize.None
+end
+
+function UI_LAYOUT.refreshDashboard()
+    local dash = GUI.dashboard
+    if not dash or not dash.Parent then return end
+    local m = UI_LAYOUT.metrics()
+    local suite = GUI.advancedSuite
+    local desiredW = cl(330, 240, math.max(240, m.width - 24))
+    local textW = math.max(180, desiredW - 16)
+    local textH = UI_LAYOUT.measureTextHeight(dash, textW, dash.Text, dash.TextSize, dash.Font)
+    local desiredH = cl(textH + 22, 110, math.max(110, m.height - 24))
+    UI_LAYOUT.setSize(dash, desiredW, desiredH)
+    dash.TextWrapped = true
+    dash.Size = UDim2.fromOffset(desiredW, desiredH)
+    local gap = UI_LAYOUT.metrics().gap
+    if suite and suite.Parent and suite.Visible then
+        local sa = suite.AbsolutePosition
+        local sb = suite.AbsoluteSize
+        local parentAbs = Vector2.new(0,0)
+        pcall(function() parentAbs = dash.Parent.AbsolutePosition end)
+        local x = (sa.X - parentAbs.X) / m.scale - desiredW - gap
+        local y = (sa.Y - parentAbs.Y) / m.scale
+        x = cl(x, 0, math.max(0, m.width - desiredW))
+        y = cl(y, 0, math.max(0, m.height - desiredH))
+        dash.AnchorPoint = Vector2.new(0,0)
+        dash.Position = UDim2.fromOffset(x,y)
+    else
+        dash.AnchorPoint = Vector2.new(1,0.5)
+        dash.Position = UDim2.new(1,-gap,0, m.height*0.5)
+    end
+end
+
+function UI_LAYOUT.refreshRestoreBar()
+    local bar = GUI.restoreBar
+    if not bar then return end
+    local m = UI_LAYOUT.metrics()
+    local saved = ST.uiSizes and ST.uiSizes.restoreBar
+    -- Restore bar uses its own drag state rather than ST.uiPositions.
+    if ST.restoreBarDragged then return end
+    local textW = GUI.restoreText and UI_LAYOUT.measureTextWidth(GUI.restoreText.Text, GUI.restoreText.TextSize, GUI.restoreText.Font) or 120
+    local hintW = GUI.restoreHint and UI_LAYOUT.measureTextWidth(GUI.restoreHint.Text, GUI.restoreHint.TextSize, GUI.restoreHint.Font) or 70
+    local desiredW = cl(math.max(170, textW + 54, hintW + 34), 160, math.max(160, m.width - 12))
+    local desiredH = math.max(m.touch and 46 or 42, 44)
+    local wrapW = math.max(100, desiredW - 44)
+    if GUI.restoreText then
+        local textH = UI_LAYOUT.measureTextHeight(GUI.restoreText, wrapW, GUI.restoreText.Text, GUI.restoreText.TextSize, GUI.restoreText.Font)
+        desiredH = math.max(desiredH, textH + 18)
+        GUI.restoreText.Size = UDim2.new(1,-40,0,math.max(20,desiredH-2))
+        GUI.restoreText.Position = UDim2.new(0,32,0,4)
+    end
+    if GUI.restoreHint then
+        GUI.restoreHint.Size = UDim2.new(0,math.min(92,math.max(62,desiredW-62)),0,14)
+    end
+    if not saved or saved.resized ~= true then
+        UI_LAYOUT.setSize(bar, desiredW, desiredH)
+    end
+end
+
+function UI_LAYOUT.refreshAdvancedSuite()
+    local suite=GUI.advancedSuite
+    if not suite or not suite.Parent then return end
+    local m=UI_LAYOUT.metrics()
+    local saved=ST.uiSizes and ST.uiSizes.advancedSuite
+    local auto=not(saved and saved.resized==true)
+    if auto then
+        local desiredW={COMPACT=520,STANDARD=560,WIDE=650}
+        local layoutName=tostring(S.V40.layout or "STANDARD"):upper()
+        local w=desiredW[layoutName] or 560
+        w=cl(w,280,math.max(280,m.width-m.panelMargin*2))
+        UI_LAYOUT.setSize(suite,w,suite.Size.Y.Offset)
+    end
+    local content=suite:FindFirstChild("Content")
+    if content and content:FindFirstChildOfClass("UIListLayout") then
+        UI_LAYOUT.refreshScrollCanvas(content)
+        local layout=content:FindFirstChildOfClass("UIListLayout")
+        if auto and layout then
+            local contentH=tonumber(layout.AbsoluteContentSize.Y) or 0
+            local target=cl(contentH+70,280,math.max(280,m.height-m.panelMargin*2))
+            UI_LAYOUT.tweenHeight(suite,target,0.14,false)
+        end
+    end
+end
+
+function UI_LAYOUT.updateResponsiveUISizes(force)
+    local m=UI_LAYOUT.metrics()
+    local signature=table.concat({
+        math.floor(m.pixelW+0.5), math.floor(m.pixelH+0.5),
+        string.format("%.3f",m.scale), m.compact and "1" or "0",
+        tostring(m.spacing), m.touch and "1" or "0",
+        tostring((ST.uiPositions.main and ST.uiPositions.main.dragged) or false),
+        tostring((ST.uiPositions.ignore and ST.uiPositions.ignore.dragged) or false),
+        tostring((ST.uiPositions.settings and ST.uiPositions.settings.dragged) or false),
+        tostring((ST.uiPositions.mobile and ST.uiPositions.mobile.dragged) or false),
+        tostring((ST.uiPositions.featureCenter and ST.uiPositions.featureCenter.dragged) or false),
+        tostring((ST.uiPositions.advancedSuite and ST.uiPositions.advancedSuite.dragged) or false),
+        tostring(ST.restoreBarDragged == true)
+    }, ":")
+    if not force and not UI_LAYOUT.dirty and UI_LAYOUT.signature==signature then
+        return false
+    end
+    UI_LAYOUT.signature=signature
+    UI_LAYOUT.dirty=false
+
+    for key in pairs(UI_LAYOUT.panels) do
+        pcall(UI_LAYOUT.clampPanelState,key,m)
+    end
+    pcall(UI_LAYOUT.refreshMainDeck)
+    pcall(UI_LAYOUT.refreshIgnorePanelGeometry)
+    pcall(UI_LAYOUT.refreshSettingsPanel)
+    pcall(UI_LAYOUT.refreshFeatureCenter)
+    pcall(UI_LAYOUT.refreshMobilePanel)
+    pcall(UI_LAYOUT.refreshRestoreBar)
+    pcall(UI_LAYOUT.refreshDashboard)
+    pcall(UI_LAYOUT.refreshAdvancedSuite)
+    return true
+end
 
 local function layoutCacheChanged(vw, vh, scale)
     local main = GUI.main
@@ -2156,18 +3421,27 @@ local function layoutCacheChanged(vw, vh, scale)
     local setp = GUI.setPanel
     local rb = GUI.restoreBar
     local mp = GUI.mobilePanel
+    local fc = GUI.featureCenter
+    local suite = GUI.advancedSuite
     return LAYOUT_CACHE.vw ~= vw
         or LAYOUT_CACHE.vh ~= vh
         or LAYOUT_CACHE.scale ~= scale
+        or LAYOUT_CACHE.compact ~= S.V40.compactMode
+        or LAYOUT_CACHE.spacing ~= S.V40.uiSpacing
+        or LAYOUT_CACHE.touch ~= MOB
         or LAYOUT_CACHE.mainVisible ~= (main and main.Visible or false)
         or LAYOUT_CACHE.ignoreVisible ~= (ig and ig.Visible or false)
         or LAYOUT_CACHE.settingsVisible ~= (setp and setp.Visible or false)
         or LAYOUT_CACHE.restoreVisible ~= (rb and rb.Visible or false)
         or LAYOUT_CACHE.mobileExists ~= (mp ~= nil)
+        or LAYOUT_CACHE.featureCenterVisible ~= (fc and fc.Visible or false)
+        or LAYOUT_CACHE.advancedSuiteVisible ~= (suite and suite.Visible or false)
         or LAYOUT_CACHE.mainDragged ~= (ST.uiPositions.main and ST.uiPositions.main.dragged or false)
         or LAYOUT_CACHE.ignoreDragged ~= (ST.uiPositions.ignore and ST.uiPositions.ignore.dragged or false)
         or LAYOUT_CACHE.settingsDragged ~= (ST.uiPositions.settings and ST.uiPositions.settings.dragged or false)
         or LAYOUT_CACHE.mobileDragged ~= (ST.uiPositions.mobile and ST.uiPositions.mobile.dragged or false)
+        or LAYOUT_CACHE.featureCenterDragged ~= (ST.uiPositions.featureCenter and ST.uiPositions.featureCenter.dragged or false)
+        or LAYOUT_CACHE.advancedSuiteDragged ~= (ST.uiPositions.advancedSuite and ST.uiPositions.advancedSuite.dragged or false)
         or LAYOUT_CACHE.restoreDragged ~= (ST.restoreBarDragged == true)
 end
 
@@ -2941,6 +4215,10 @@ local function makeResizable(panel, key, minW, minH, maxW, maxH)
     maxW = math.max(minW, tonumber(maxW) or 1200)
     maxH = math.max(minH, tonumber(maxH) or 1000)
 
+    -- Central layout API owns viewport-aware min/max bounds; the shared
+    -- resize interaction still writes ST.uiSizes exactly as before.
+    UI_LAYOUT.registerPanel(panel, key, minW, minH, maxW, maxH)
+
     local existing = panel:FindFirstChild("OPSYXResizeLayer")
     if existing then existing:Destroy() end
 
@@ -2995,9 +4273,12 @@ local function makeResizable(panel, key, minW, minH, maxW, maxH)
         return g
     end
 
-    grip("Right", UDim2.new(1,-6,0,12), UDim2.new(0,8,1,-18), "right")
-    grip("Bottom", UDim2.new(0,12,1,-6), UDim2.new(1,-18,0,8), "bottom")
-    grip("Corner", UDim2.new(1,-16,1,-16), UDim2.new(0,16,0,16), "corner")
+    local gripW = MOB and 12 or 8
+    local gripH = MOB and 12 or 8
+    local cornerW = MOB and 20 or 16
+    grip("Right", UDim2.new(1,-gripW,0,12), UDim2.new(0,gripW,1,-18), "right")
+    grip("Bottom", UDim2.new(0,12,1,-gripH), UDim2.new(1,-18,0,gripH), "bottom")
+    grip("Corner", UDim2.new(1,-cornerW,1,-cornerW), UDim2.new(0,cornerW,0,cornerW), "corner")
 
     -- Tiny visible corner marker: tells the user exactly where to hold.
     local mark = Instance.new("TextLabel")
@@ -3017,10 +4298,11 @@ local function makeResizable(panel, key, minW, minH, maxW, maxH)
     -- Apply a previously saved size.
     local saved = ST.uiSizes and ST.uiSizes[key]
     if saved and saved.resized and saved.w and saved.h then
-        panel.Size = UDim2.fromOffset(
-            cl(tonumber(saved.w) or panel.Size.X.Offset, minW, maxW),
-            cl(tonumber(saved.h) or panel.Size.Y.Offset, minH, maxH)
-        )
+        local bounds = UI_LAYOUT.clampPanelState(key) or {minW=minW,minH=minH,maxW=maxW,maxH=maxH}
+        local w = cl(tonumber(saved.w) or panel.Size.X.Offset, bounds.minW, bounds.maxW)
+        local h = cl(tonumber(saved.h) or panel.Size.Y.Offset, bounds.minH, bounds.maxH)
+        panel.Size = UDim2.fromOffset(w, h)
+        saved.w, saved.h = w, h
     end
 end
 
@@ -3085,7 +4367,7 @@ hook(UI.InputEnded:Connect(function(inp)
     end
 end))
 
-local function applyDraggedPanelPosition(panel, key)
+applyDraggedPanelPosition = function(panel, key)
     if not panel then return false end
 
     local state = ST.uiPositions[key]
@@ -3128,6 +4410,7 @@ ST.__CGCTX = {
     RS = RS,
     UI = UI,
     TS = TS,
+    UI_LAYOUT = UI_LAYOUT,
     HttpService = HttpService,
     WS = WS,
     CG = CG,
@@ -3465,27 +4748,36 @@ local function cg()
     pcall(function() Instance.new("UICorner",statusDot).CornerRadius = UDim.new(1,0) end)
 
     local titleLbl = Instance.new("TextLabel")
+    titleLbl.Name = "OPSYXMainTitle"
     titleLbl.Size = UDim2.new(1,-104,0,20); titleLbl.Position = UDim2.new(0,33,0,9)
     titleLbl.BackgroundTransparency = 1
     titleLbl.Text = "OPSYX  //  CONTROL DECK"
     titleLbl.TextColor3 = Color3.fromRGB(225,242,255)
     titleLbl.TextSize = 14; titleLbl.Font = Enum.Font.GothamBold
     titleLbl.TextXAlignment = Enum.TextXAlignment.Left
+    titleLbl.TextYAlignment = Enum.TextYAlignment.Center
+    titleLbl.TextWrapped = true
+    titleLbl.TextTruncate = Enum.TextTruncate.None
     titleLbl.Parent = main
     C.GUI.titleLabel = titleLbl
     titleLbl.Active = true
 
     local subLbl = Instance.new("TextLabel")
+    subLbl.Name = "OPSYXMainStatus"
     subLbl.Size = UDim2.new(1,-128,0,14); subLbl.Position = UDim2.new(0,33,0,29)
     subLbl.BackgroundTransparency = 1
     subLbl.Text = "LOCAL SESSION  •  READY"
     subLbl.TextColor3 = C.UI_TEXT_SECONDARY
     subLbl.TextSize = 8; subLbl.Font = Enum.Font.GothamMedium
     subLbl.TextXAlignment = Enum.TextXAlignment.Left
+    subLbl.TextYAlignment = Enum.TextYAlignment.Center
+    subLbl.TextWrapped = true
+    subLbl.TextTruncate = Enum.TextTruncate.None
     subLbl.Parent = main
     C.GUI.statusLabel = subLbl
+    C.hook(C.UI_LAYOUT.watchText(subLbl, function() C.UI_LAYOUT.queue("main-status") end))
 
-    local WBTN = 22; local WCY = 14
+    local WBTN = MOB and 30 or 22; local WCY = MOB and 10 or 14
     local function makeWBtn(xOff, col, lbl2)
         local b = Instance.new("TextButton")
         b.Size = UDim2.new(0,WBTN,0,WBTN); b.Position = UDim2.new(1,xOff,0,WCY)
@@ -3508,7 +4800,7 @@ local function cg()
     closeBtn.MouseLeave:Connect(function() C.tween(closeBtn,TweenInfo.new(.14),{BackgroundColor3=Color3.fromRGB(92,34,48),BackgroundTransparency=.12}) end)
 
     local restoreBar = Instance.new("TextButton")
-    restoreBar.Size = UDim2.new(0,220,0,42)
+    restoreBar.Size = UDim2.new(0,220,0,MOB and 46 or 42)
     restoreBar.AnchorPoint = Vector2.new(1, 0)
     restoreBar.Position = UDim2.new(1,-18,0,10)
     restoreBar.BackgroundColor3 = Color3.fromRGB(10,16,28)
@@ -3552,7 +4844,8 @@ local function cg()
     restoreText.Font = Enum.Font.GothamBold
     restoreText.TextXAlignment = Enum.TextXAlignment.Left
     restoreText.TextYAlignment = Enum.TextYAlignment.Center
-    restoreText.TextWrapped = false
+    restoreText.TextWrapped = true
+    restoreText.TextTruncate = Enum.TextTruncate.None
     restoreText.TextScaled = false
     restoreText.TextTransparency = 0
     restoreText.TextStrokeColor3 = Color3.fromRGB(0,0,0)
@@ -3571,6 +4864,8 @@ local function cg()
     restoreHint.TextSize = 7
     restoreHint.Font = Enum.Font.GothamMedium
     restoreHint.TextXAlignment = Enum.TextXAlignment.Right
+    restoreHint.TextWrapped = true
+    restoreHint.TextTruncate = Enum.TextTruncate.None
     restoreHint.TextTransparency = 0
     restoreHint.TextStrokeColor3 = Color3.fromRGB(0,0,0)
     restoreHint.TextStrokeTransparency = 0.12
@@ -3644,6 +4939,7 @@ local function cg()
     -- ============================================================
     local function makeToggle(lbl, xPos, yPos, w, offCol, onCol, getter, setter)
         local row = Instance.new("Frame")
+        row.Name = "OPSYXMainFeatureCard_" .. tostring(lbl):gsub("%W", "")
         row.Size = UDim2.new(0, w, 0, 42)
         row.Position = UDim2.new(0, xPos, 0, yPos)
         row.BackgroundColor3 = C.UI_PANEL_SOFT
@@ -3651,12 +4947,16 @@ local function cg()
         row.BorderSizePixel = 0
         row.Parent = main
         pcall(function()
+            row:SetAttribute("OPSYXMainFeatureCard", true)
             Instance.new("UICorner", row).CornerRadius = UDim.new(0, 9)
             local stroke = Instance.new("UIStroke", row)
             stroke.Color = Color3.fromRGB(56,76,102)
             stroke.Transparency = 0.48
             stroke.Thickness = 1
         end)
+
+        C.GUI.mainFeatureRows = C.GUI.mainFeatureRows or {}
+        table.insert(C.GUI.mainFeatureRows, row)
 
         row.MouseEnter:Connect(function()
             C.tween(row, TweenInfo.new(0.10), {BackgroundColor3=C.UI_HOVER, BackgroundTransparency=0.01})
@@ -3666,6 +4966,7 @@ local function cg()
         end)
 
         local lbEl = Instance.new("TextLabel")
+        lbEl.Name = "OPSYXMainCardLabel"
         lbEl.Size = UDim2.new(1, -12, 0, 18)
         lbEl.Position = UDim2.new(0, 6, 0, 4)
         lbEl.BackgroundTransparency = 1
@@ -3674,9 +4975,16 @@ local function cg()
         lbEl.TextSize = 10
         lbEl.Font = Enum.Font.GothamBold
         lbEl.TextXAlignment = Enum.TextXAlignment.Center
+        lbEl.TextYAlignment = Enum.TextYAlignment.Center
+        lbEl.TextWrapped = true
+        lbEl.TextTruncate = Enum.TextTruncate.None
         lbEl.Parent = row
+        C.hook(C.UI_LAYOUT.watchText(lbEl, function()
+            C.UI_LAYOUT.queue("main-label")
+        end))
 
         local pill = Instance.new("TextButton")
+        pill.Name = "OPSYXMainPill"
         pill.Size = UDim2.new(1, -12, 0, 16)
         pill.Position = UDim2.new(0, 6, 1, -20)
         pill.BackgroundColor3 = getter() and onCol or offCol
@@ -3686,6 +4994,8 @@ local function cg()
         pill.TextSize = 8
         pill.Font = Enum.Font.GothamBold
         pill.AutoButtonColor = false
+        pill.TextWrapped = false
+        pill.TextYAlignment = Enum.TextYAlignment.Center
         pill.Parent = row
         pcall(function() Instance.new("UICorner", pill).CornerRadius = UDim.new(1,0) end)
 
@@ -3756,8 +5066,16 @@ local function cg()
         b.TextColor3 = txtCol
         b.TextSize = 9
         b.Font = Enum.Font.GothamBold
+        b.TextWrapped = true
+        b.TextTruncate = Enum.TextTruncate.None
+        b.TextYAlignment = Enum.TextYAlignment.Center
         b.AutoButtonColor = false
         b.Parent = main
+        C.GUI.mainActionButtons = C.GUI.mainActionButtons or {}
+        table.insert(C.GUI.mainActionButtons, b)
+        C.hook(C.UI_LAYOUT.watchText(b, function()
+            C.UI_LAYOUT.queue("main-action")
+        end))
         pcall(function()
             Instance.new("UICorner",b).CornerRadius = UDim.new(0,8)
             local bs = Instance.new("UIStroke",b)
@@ -3800,7 +5118,42 @@ local function cg()
     footer.TextSize = 7
     footer.Font = Enum.Font.GothamMedium
     footer.TextXAlignment = Enum.TextXAlignment.Center
+    footer.TextYAlignment = Enum.TextYAlignment.Center
+    footer.TextWrapped = true
+    footer.TextTruncate = Enum.TextTruncate.None
     footer.Parent = main
+    C.GUI.mainFooter = footer
+
+    -- The header stays fixed; everything below it lives in one event-driven
+    -- ScrollingFrame so a user-resized short deck never clips its controls.
+    local mainScroll = Instance.new("ScrollingFrame")
+    mainScroll.Name = "OPSYXMainContent"
+    mainScroll.Size = UDim2.new(1,-16,1,-60)
+    mainScroll.Position = UDim2.new(0,8,0,56)
+    mainScroll.BackgroundTransparency = 1
+    mainScroll.BorderSizePixel = 0
+    mainScroll.ScrollBarThickness = 4
+    mainScroll.ScrollingDirection = Enum.ScrollingDirection.Y
+    mainScroll.AutomaticCanvasSize = Enum.AutomaticSize.None
+    mainScroll.CanvasSize = UDim2.new(0,0,0,0)
+    mainScroll.ZIndex = 1001
+    mainScroll.Parent = main
+    C.GUI.mainScroll = mainScroll
+
+    local contentObjects = {}
+    if C.GUI.mainFeatureRows then
+        for i=1,#C.GUI.mainFeatureRows do contentObjects[#contentObjects+1] = C.GUI.mainFeatureRows[i] end
+    end
+    if C.GUI.mainActionButtons then
+        for i=1,#C.GUI.mainActionButtons do contentObjects[#contentObjects+1] = C.GUI.mainActionButtons[i] end
+    end
+    contentObjects[#contentObjects+1] = footer
+    for i=1,#contentObjects do
+        local obj = contentObjects[i]
+        if obj and obj.Parent == main then
+            obj.Parent = mainScroll
+        end
+    end
 
     local IG_W = 250
     local igPanel = Instance.new("Frame")
@@ -3987,6 +5340,7 @@ local function cg()
     spTitle.TextColor3 = C.UI_TEXT_PRIMARY
     spTitle.TextSize = 12; spTitle.Font = Enum.Font.GothamBold
     spTitle.TextStrokeTransparency = 0.72; spTitle.TextStrokeColor3 = Color3.fromRGB(0,0,0)
+    spTitle.Name="OPSYXSettingsTitle"
     spTitle.Active = true; spTitle.Parent = setP
 
     local spAccent = Instance.new("Frame")
@@ -4013,7 +5367,9 @@ local function cg()
         lbl2.TextColor3 = C.UI_TEXT_SECONDARY
         lbl2.TextSize = 12; lbl2.Font = Enum.Font.Gotham
         lbl2.TextStrokeTransparency = 0.78; lbl2.TextStrokeColor3 = Color3.fromRGB(0,0,0)
-        lbl2.TextXAlignment = Enum.TextXAlignment.Left; lbl2.Parent = setP
+        lbl2.TextXAlignment = Enum.TextXAlignment.Left
+        pcall(function() lbl2:SetAttribute("OPSYXSettingsRole","label") end)
+        lbl2.Parent = setP
 
         local kb = Instance.new("TextButton")
         kb.Size = UDim2.new(0,KBTN_W,0,26)
@@ -4021,7 +5377,10 @@ local function cg()
         kb.BackgroundColor3 = C.UI_PANEL_INPUT; kb.BackgroundTransparency = 0.04
         kb.BorderSizePixel = 0; kb.Text = C.S.KB[bd.k]
         kb.TextColor3 = C.UI_ACTIVE
-        kb.TextSize = 12; kb.Font = Enum.Font.GothamBold; kb.Parent = setP
+        kb.TextSize = 12; kb.Font = Enum.Font.GothamBold
+        kb.TextWrapped = true; kb.TextTruncate = Enum.TextTruncate.None
+        pcall(function() kb:SetAttribute("OPSYXSettingsRole","value") end)
+        kb.Parent = setP
         pcall(function() Instance.new("UICorner",kb).CornerRadius = UDim.new(0,5) end)
 
         KB_BTNS[bd.k] = kb
@@ -4040,13 +5399,17 @@ local function cg()
     wallLbl.TextSize = 12; wallLbl.Font = Enum.Font.Gotham
     wallLbl.TextStrokeTransparency = 0.78; wallLbl.TextStrokeColor3 = Color3.fromRGB(0,0,0)
     wallLbl.TextXAlignment = Enum.TextXAlignment.Left
+    pcall(function() wallLbl:SetAttribute("OPSYXSettingsRole","label") end)
     wallLbl.Parent = setP
     local wallVal = Instance.new("TextLabel")
     wallVal.Size = UDim2.new(0,KBTN_W,0,26); wallVal.Position = UDim2.new(0,KPAD+KLBL_W+10,0,wallRy)
     wallVal.BackgroundColor3 = Color3.fromRGB(24,78,52); wallVal.BackgroundTransparency = 0.04
     wallVal.BorderSizePixel = 0; wallVal.Text = "ALWAYS ON"
     wallVal.TextColor3 = Color3.fromRGB(120,255,160); wallVal.TextSize = 11
-    wallVal.Font = Enum.Font.GothamBold; wallVal.Parent = setP
+    wallVal.Font = Enum.Font.GothamBold
+    wallVal.TextWrapped = true; wallVal.TextTruncate = Enum.TextTruncate.None
+    pcall(function() wallVal:SetAttribute("OPSYXSettingsRole","value") end)
+    wallVal.Parent = setP
     pcall(function() Instance.new("UICorner",wallVal).CornerRadius = UDim.new(0,5) end)
 
     local fixY = wallRy + 30
@@ -4063,7 +5426,10 @@ local function cg()
         val.BackgroundColor3 = C.UI_PANEL_INPUT; val.BackgroundTransparency = 0.04
         val.BorderSizePixel = 0; val.Text = keyName
         val.TextColor3 = C.UI_TEXT_MUTED
-        val.TextSize = 11; val.Font = Enum.Font.Gotham; val.Parent = setP
+        val.TextSize = 11; val.Font = Enum.Font.Gotham
+        val.TextWrapped = true; val.TextTruncate = Enum.TextTruncate.None
+        pcall(function() val:SetAttribute("OPSYXSettingsRole","value") end)
+        val.Parent = setP
         pcall(function() Instance.new("UICorner",val).CornerRadius = UDim.new(0,5) end)
     end
     fixedRow("Keys Panel", "F5  (fixed)",  fixY)
@@ -4077,7 +5443,9 @@ local function cg()
     tcLbl.TextColor3 = C.UI_TEXT_SECONDARY
     tcLbl.TextSize = 12; tcLbl.Font = Enum.Font.Gotham
     tcLbl.TextStrokeTransparency = 0.78; tcLbl.TextStrokeColor3 = Color3.fromRGB(0,0,0)
-    tcLbl.TextXAlignment = Enum.TextXAlignment.Left; tcLbl.Parent = setP
+    tcLbl.TextXAlignment = Enum.TextXAlignment.Left
+    pcall(function() tcLbl:SetAttribute("OPSYXSettingsRole","label") end)
+    tcLbl.Parent = setP
     local tcBtn = Instance.new("TextButton")
     tcBtn.Size = UDim2.new(0,KBTN_W,0,26)
     tcBtn.Position = UDim2.new(0, KPAD+KLBL_W+10, 0, tcY)
@@ -4085,7 +5453,10 @@ local function cg()
     tcBtn.BackgroundTransparency = 0.2; tcBtn.BorderSizePixel = 0
     tcBtn.Text = C.S.AM.tc and "ON" or "OFF"
     tcBtn.TextColor3 = Color3.fromRGB(255,255,255)
-    tcBtn.TextSize = 12; tcBtn.Font = Enum.Font.GothamBold; tcBtn.Parent = setP
+    tcBtn.TextSize = 12; tcBtn.Font = Enum.Font.GothamBold
+    tcBtn.TextWrapped = true; tcBtn.TextTruncate = Enum.TextTruncate.None
+    pcall(function() tcBtn:SetAttribute("OPSYXSettingsRole","value") end)
+    tcBtn.Parent = setP
     pcall(function() Instance.new("UICorner",tcBtn).CornerRadius = UDim.new(0,5) end)
     tcBtn.MouseButton1Down:Connect(function()
         local nv = not C.S.AM.tc
@@ -4107,11 +5478,15 @@ local function cg()
     fovLbl.TextColor3 = C.UI_TEXT_SECONDARY
     fovLbl.TextSize = 12; fovLbl.Font = Enum.Font.Gotham
     fovLbl.TextStrokeTransparency = 0.78; fovLbl.TextStrokeColor3 = Color3.fromRGB(0,0,0)
-    fovLbl.TextXAlignment = Enum.TextXAlignment.Left; fovLbl.Parent = setP
+    fovLbl.TextXAlignment = Enum.TextXAlignment.Left
+    pcall(function() fovLbl:SetAttribute("OPSYXSettingsRole","fovlabel") end)
+    fovLbl.Parent = setP
 
     local sBg = Instance.new("Frame")
     sBg.Size = UDim2.new(0,SLDR_W,0,6); sBg.Position = UDim2.new(0,KPAD,0,slY+22)
-    sBg.BackgroundColor3 = Color3.fromRGB(42,52,68); sBg.BorderSizePixel = 0; sBg.Parent = setP
+    sBg.BackgroundColor3 = Color3.fromRGB(42,52,68); sBg.BorderSizePixel = 0
+    pcall(function() sBg:SetAttribute("OPSYXSettingsRole","slider") end)
+    sBg.Parent = setP
     pcall(function() Instance.new("UICorner",sBg).CornerRadius = UDim.new(0,3) end)
 
     local sFill = Instance.new("Frame")
@@ -4132,7 +5507,10 @@ local function cg()
     cBtn.BackgroundColor3 = C.S.FV.c; cBtn.BackgroundTransparency = 0.08; cBtn.BorderSizePixel = 0
     cBtn.Text = "FOV COLOR"; cBtn.TextColor3 = Color3.fromRGB(248,252,255)
     cBtn.TextStrokeTransparency = 0.35; cBtn.TextStrokeColor3 = Color3.fromRGB(0,0,0)
-    cBtn.TextSize = 10; cBtn.Font = Enum.Font.GothamBold; cBtn.Parent = setP
+    cBtn.TextSize = 10; cBtn.Font = Enum.Font.GothamBold
+    cBtn.TextWrapped = true; cBtn.TextTruncate = Enum.TextTruncate.None
+    pcall(function() cBtn:SetAttribute("OPSYXSettingsRole","fovcolor") end)
+    cBtn.Parent = setP
     pcall(function() Instance.new("UICorner",cBtn).CornerRadius = UDim.new(0,6) end)
     cBtn.MouseEnter:Connect(function() C.tween(cBtn, TweenInfo.new(0.10), {BackgroundTransparency = 0}) end)
     cBtn.MouseLeave:Connect(function() C.tween(cBtn, TweenInfo.new(0.14), {BackgroundTransparency = 0.08}) end)
@@ -4154,7 +5532,9 @@ local function cg()
     clBtn.BackgroundColor3 = Color3.fromRGB(60,20,20); clBtn.BackgroundTransparency = 0.2
     clBtn.BorderSizePixel = 0; clBtn.Text = "CLOSE"
     clBtn.TextColor3 = Color3.fromRGB(255,140,140)
-    clBtn.TextSize = 11; clBtn.Font = Enum.Font.GothamBold; clBtn.Parent = setP
+    clBtn.TextSize = 11; clBtn.Font = Enum.Font.GothamBold
+    clBtn.TextWrapped = true; clBtn.TextTruncate = Enum.TextTruncate.None
+    clBtn.Parent = setP
     pcall(function() Instance.new("UICorner",clBtn).CornerRadius = UDim.new(0,5) end)
     clBtn.MouseButton1Down:Connect(function() C.toggleKeysPanel() end)
     setBtn.MouseButton1Down:Connect(function()  C.toggleKeysPanel() end)
@@ -4261,7 +5641,9 @@ local function cg()
     end)
 
     local fcStatus = Instance.new("TextLabel")
-    fcStatus.Size = UDim2.new(1,-20,0,70)
+    fcStatus.Name = "OPSYXFeatureCenterStatus"
+    fcStatus.Size = UDim2.new(1,-20,0,0)
+    fcStatus.AutomaticSize = Enum.AutomaticSize.Y
     fcStatus.Position = UDim2.new(0,10,0,34)
     fcStatus.BackgroundColor3 = Color3.fromRGB(10,12,22)
     fcStatus.BackgroundTransparency = 0.18
@@ -4272,7 +5654,10 @@ local function cg()
     fcStatus.TextXAlignment = Enum.TextXAlignment.Left
     fcStatus.TextYAlignment = Enum.TextYAlignment.Top
     fcStatus.TextWrapped = true
+    fcStatus.TextTruncate = Enum.TextTruncate.None
     fcStatus.Text = "OPSYX diagnostics initializing..."
+    pcall(function() fcStatus:SetAttribute("OPSYXFCStatus", true) end)
+    C.hook(C.UI_LAYOUT.watchText(fcStatus, function() C.UI_LAYOUT.queue("feature-status") end))
     fcStatus.ZIndex = 61
     fcStatus.Parent = FEATURE_CENTER
     pcall(function() Instance.new("UICorner",fcStatus).CornerRadius = UDim.new(0,6) end)
@@ -4352,6 +5737,7 @@ local function cg()
         local scale = tonumber(d.uiScale) or 1
         scale = cl(scale, 0.75, 1.35)
         if C.GUI.uiScale then C.GUI.uiScale.Scale = scale end
+        pcall(function() C.UI_LAYOUT.markDirty(); C.UI_LAYOUT.queue("profile-ui-scale") end)
         if type(d.ES) == "table" then
             local preset = tostring(d.ES.espPreset or ""):upper()
             if preset == "PERFORMANCE" or tostring(d.ES.espAdvancedMode or ""):upper() == "LOW" then
@@ -4911,13 +6297,17 @@ local function cg()
     local FC_GRID_X, FC_GRID_Y = 14, 112
     local FC_GRID_W, FC_GRID_H, FC_GRID_GAP = 176, 28, FC_AUTO_GAP
     local function fcButton(text, x, y, w, callback)
+        fcButtonIndex = fcButtonIndex + 1
         -- Ignore legacy hand-written coordinates and place every control into
         -- one deterministic 3-column grid. This prevents drift/misalignment.
-        fcButtonIndex = fcButtonIndex + 1
         local gridIndex = fcButtonIndex - 1
         local gx = FC_GRID_X + (gridIndex % FC_AUTO_COLUMNS) * (FC_GRID_W + FC_GRID_GAP)
         local gy = FC_GRID_Y + math.floor(gridIndex / FC_AUTO_COLUMNS) * (FC_GRID_H + FC_GRID_GAP)
         local b = Instance.new("TextButton")
+        pcall(function()
+            b:SetAttribute("OPSYXFCButton", true)
+            b:SetAttribute("OPSYXFCOrder", fcButtonIndex)
+        end)
         b.Size=UDim2.new(0,FC_GRID_W,0,FC_GRID_H); b.Position=UDim2.new(0,gx,0,gy)
         b.BackgroundColor3=Color3.fromRGB(20,28,45); b.BackgroundTransparency=0.06
         b.BorderSizePixel=0; b.Text=text; b.TextColor3=Color3.fromRGB(228,236,248)
@@ -5015,6 +6405,8 @@ local function cg()
         if type(_G.__V94OPSYX_CL)=="function" then _G.__V94OPSYX_CL() end
     end)
     local fcHint = Instance.new("TextLabel")
+        fcHint.Name="OPSYXFeatureCenterHint"
+        C.GUI.featureCenterHint = fcHint
     fcHint.Size=UDim2.new(1,-20,0,40); fcHint.Position=UDim2.new(0,10,1,-48)
     fcHint.BackgroundTransparency=1; fcHint.Text="F6 Feature Center  •  SNAP " .. (C.S.V39.snapPanels and "ON" or "OFF") .. "  •  LOCK " .. (C.S.V39.layoutLocked and "ON" or "OFF") .. "\nCtrl+F8 Master UI | Local-only settings"
     fcHint.TextColor3=Color3.fromRGB(120,135,155); fcHint.TextSize=9; fcHint.Font=Enum.Font.Gotham
@@ -5376,13 +6768,30 @@ if MOB then
         mAccent.BackgroundColor3 = Color3.fromRGB(0,180,255)
         mAccent.BorderSizePixel = 0; mAccent.Parent = mPanel
 
-        local mY = 50; local mGAP = 39; local BTN_H = 34
+        local mBody = Instance.new("ScrollingFrame")
+        mBody.Name = "OPSYSMobileContent"
+        mBody.Size = UDim2.new(1,-8,1,-58)
+        mBody.Position = UDim2.new(0,4,0,50)
+        mBody.BackgroundTransparency = 1
+        mBody.BorderSizePixel = 0
+        mBody.ScrollBarThickness = 3
+        mBody.Active = true
+        mBody.ScrollingDirection = Enum.ScrollingDirection.Y
+        mBody.AutomaticCanvasSize = Enum.AutomaticSize.None
+        mBody.CanvasSize = UDim2.new(0,0,0,0)
+        mBody.ZIndex = 71
+        mBody.Parent = mPanel
+        GUI.mobileBody = mBody
+
+        local mY = 4; local mGAP = 7; local BTN_H = 36
 
         local function mToggle(lbl, offC, onC, getter, setter)
             local row = Instance.new("Frame")
+            row.Name = "OPSYSMobileRow_" .. tostring(lbl):gsub("%W","")
             row.Size = UDim2.new(1,-8,0,BTN_H); row.Position = UDim2.new(0,4,0,mY)
+            pcall(function() row:SetAttribute("OPSYSMobileRow",true) end)
             row.BackgroundColor3 = Color3.fromRGB(18,18,30)
-            row.BackgroundTransparency = 0.25; row.BorderSizePixel = 0; row.Parent = mPanel
+            row.BackgroundTransparency = 0.25; row.BorderSizePixel = 0; row.Parent = mBody
             pcall(function() Instance.new("UICorner",row).CornerRadius = UDim.new(0,7) end)
 
             local nameLbl = Instance.new("TextLabel")
@@ -5390,14 +6799,19 @@ if MOB then
             nameLbl.Text = lbl; nameLbl.TextColor3 = UI_TEXT_PRIMARY
             nameLbl.TextSize = 11; nameLbl.Font = Enum.Font.GothamBold
             nameLbl.TextXAlignment = Enum.TextXAlignment.Left
+            nameLbl.TextYAlignment = Enum.TextYAlignment.Center
+            nameLbl.TextWrapped = true
+            nameLbl.TextTruncate = Enum.TextTruncate.None
             nameLbl.Position = UDim2.new(0,6,0,0); nameLbl.Parent = row
 
             local pill = Instance.new("TextButton")
+            pill.Name = "OPSYSMobilePill"
             pill.Size = UDim2.new(0,52,0,22); pill.Position = UDim2.new(1,-56,0.5,-11)
             pill.BackgroundColor3 = getter() and onC or offC; pill.BorderSizePixel = 0
             pill.Text = getter() and "ON" or "OFF"
             pill.TextColor3 = Color3.fromRGB(255,255,255)
-            pill.TextSize = 11; pill.Font = Enum.Font.GothamBold; pill.Parent = row
+            pill.TextSize = 11; pill.Font = Enum.Font.GothamBold
+            pill.TextWrapped = false; pill.TextTruncate = Enum.TextTruncate.None; pill.Parent = row
             pcall(function() Instance.new("UICorner",pill).CornerRadius = UDim.new(1,0) end)
 
             local function refresh()
@@ -5410,7 +6824,7 @@ if MOB then
                 refresh()
                 if not ok then warn("[OPSYX] Mobile toggle " .. tostring(lbl) .. " failed: " .. tostring(err)) end
             end)
-            mY = mY + mGAP
+            mY = mY + BTN_H + mGAP
         end
 
         mToggle("AIMBOT", C_RED, C_GRN,
@@ -5533,8 +6947,14 @@ local function buildFeatureCenterCleanControls()
         end
         baseY = maxBottom + 10
 
+        local fcCleanIndex = 0
         local function addCleanButton(col, row, text, cb, height)
             local b=Instance.new("TextButton")
+            fcCleanIndex = fcCleanIndex + 1
+            pcall(function()
+                b:SetAttribute("OPSYXFCButton", true)
+                b:SetAttribute("OPSYXFCOrder", 1000 + fcCleanIndex)
+            end)
             b.Size=UDim2.new(0,W,0,height or H)
             b.Position=UDim2.new(0,baseX + col*(W+gapX),0,baseY + row*(H+gapY))
             b.BackgroundColor3=Color3.fromRGB(20,28,45)
@@ -5614,15 +7034,8 @@ local function buildFeatureCenterCleanControls()
             footer.ZIndex=62
             footer.Parent=FC
         end
-        -- Keep the footer below the last clean-grid row with a fixed 12px gap.
-        local footerY = baseY + (3 * (H + gapY)) + 2
-        footer.Position=UDim2.new(0,18,0,footerY)
-        -- Guarantee enough room for the full stack even when the panel was
-        -- created from an older/smaller saved layout.
-        local requiredH = footerY + 18 + 10
-        if FC.Size.Y.Offset < requiredH then
-            FC.Size = UDim2.fromOffset(math.max(580, FC.Size.X.Offset), math.max(650, requiredH))
-        end
+        C.GUI.featureCenterCleanFooter = footer
+        pcall(function() footer.TextWrapped = true end)
     end
 end
 
@@ -5688,7 +7101,8 @@ layoutRightDock = function(force)
         local scale = GUI.uiScale and GUI.uiScale.Scale or 1
         if scale <= 0 then scale = 1 end
 
-        if not force and not layoutCacheChanged(vw, vh, scale) then
+        local cacheChanged = layoutCacheChanged(vw, vh, scale)
+        if not force and not cacheChanged and not UI_LAYOUT.dirty then
             return
         end
 
@@ -5700,6 +7114,8 @@ layoutRightDock = function(force)
         LAYOUT_CACHE.settingsVisible = GUI.setPanel and GUI.setPanel.Visible or false
         LAYOUT_CACHE.restoreVisible = GUI.restoreBar and GUI.restoreBar.Visible or false
         LAYOUT_CACHE.mobileExists = GUI.mobilePanel ~= nil
+        LAYOUT_CACHE.featureCenterVisible = GUI.featureCenter and GUI.featureCenter.Visible or false
+        LAYOUT_CACHE.advancedSuiteVisible = GUI.advancedSuite and GUI.advancedSuite.Visible or false
         LAYOUT_CACHE.mainDragged = ST.uiPositions.main and ST.uiPositions.main.dragged or false
         LAYOUT_CACHE.ignoreDragged = ST.uiPositions.ignore and ST.uiPositions.ignore.dragged or false
         LAYOUT_CACHE.settingsDragged = ST.uiPositions.settings and ST.uiPositions.settings.dragged or false
@@ -5718,6 +7134,10 @@ layoutRightDock = function(force)
         local top = topPx / scale
         local gap = gapPx / scale
         local bottom = bottomPx / scale
+
+        -- Content sizing runs before docking so dock math uses the real
+        -- dimensions of expanded/collapsed panels.
+        pcall(UI_LAYOUT.updateResponsiveUISizes, true)
 
         local main = GUI.main
         local ig = GUI.igPanel
@@ -5877,6 +7297,37 @@ layoutRightDock = function(force)
                 local halfH = (mp.Size.Y.Offset * scale) * 0.5
                 local centerYpx = cl(vh * 0.5, halfH + bottomPx, vh - halfH - bottomPx)
                 mp.Position = UDim2.new(1, -rightPx, 0, centerYpx)
+            end
+
+            -- When both auxiliary panels are open, keep the mobile panel out
+            -- of the Advanced Suite's footprint whenever there is room.
+            local suite = GUI.advancedSuite
+            if suite and suite.Visible
+                and not dragged
+                and not (ST.uiPositions.advancedSuite and ST.uiPositions.advancedSuite.dragged) then
+                local parentAbs = Vector2.new(0,0)
+                pcall(function() parentAbs = suite.Parent.AbsolutePosition end)
+                local suiteX = (suite.AbsolutePosition.X - parentAbs.X) / scale
+                local suiteY = (suite.AbsolutePosition.Y - parentAbs.Y) / scale
+                local suiteW = math.max(1, suite.AbsoluteSize.X / scale)
+                local suiteH = math.max(1, suite.AbsoluteSize.Y / scale)
+                local mpW2 = math.max(1, mp.Size.X.Offset)
+                local mpH2 = math.max(1, mp.Size.Y.Offset)
+                local gap2 = math.max(6, UI_LAYOUT.metrics().gap)
+                local leftX = suiteX - mpW2 - gap2
+                if leftX >= 0 then
+                    mp.AnchorPoint = Vector2.new(0,0)
+                    mp.Position = UDim2.fromOffset(math.floor(leftX+0.5),
+                        math.floor(cl(suiteY,0,math.max(0,lh-mpH2))+0.5))
+                else
+                    local belowY = suiteY + suiteH + gap2
+                    if belowY + mpH2 <= lh - bottom then
+                        mp.AnchorPoint = Vector2.new(0,0)
+                        mp.Position = UDim2.fromOffset(
+                            math.floor(cl(lw-right-mpW2,0,math.max(0,lw-mpW2))+0.5),
+                            math.floor(belowY+0.5))
+                    end
+                end
             end
         end
     end)
@@ -7346,8 +8797,8 @@ ST.setupV40 = function()
         local savedSuiteSize = ST.uiSizes and ST.uiSizes.advancedSuite
         if savedSuiteSize and savedSuiteSize.resized and savedSuiteSize.w and savedSuiteSize.h then
             suite.Size = UDim2.fromOffset(
-                cl(tonumber(savedSuiteSize.w) or SUITE_W, 420, 760),
-                cl(tonumber(savedSuiteSize.h) or initialH, 360, 600)
+                cl(tonumber(savedSuiteSize.w) or SUITE_W, 280, 760),
+                cl(tonumber(savedSuiteSize.h) or initialH, 280, 760)
             )
         else
             suite.Size = UDim2.new(0, SUITE_W, 0, initialH)
@@ -7382,6 +8833,7 @@ ST.setupV40 = function()
         end)
 
         local title = Instance.new("TextLabel")
+        title.Name = "OPSYXAdvancedTitle"
         title.Size = UDim2.new(1, -110, 0, 28)
         title.Position = UDim2.new(0, 12, 0, 7)
         title.BackgroundTransparency = 1
@@ -7390,12 +8842,16 @@ ST.setupV40 = function()
         title.TextSize = 14
         title.Font = Enum.Font.GothamBold
         title.TextXAlignment = Enum.TextXAlignment.Left
+        title.TextYAlignment = Enum.TextYAlignment.Center
+        title.TextWrapped = true
+        title.TextTruncate = Enum.TextTruncate.None
         title.ZIndex = 81
         title.Parent = suite
         -- Dedicated drag handle: move the Advanced Suite anywhere on screen.
         makeDraggable(suite, title, "advancedSuite")
 
         local sub = Instance.new("TextLabel")
+        sub.Name = "OPSYXAdvancedSubtitle"
         sub.Size = UDim2.new(1, -120, 0, 18)
         sub.Position = UDim2.new(0, 12, 0, 31)
         sub.BackgroundTransparency = 1
@@ -7404,6 +8860,9 @@ ST.setupV40 = function()
         sub.TextSize = 9
         sub.Font = Enum.Font.Gotham
         sub.TextXAlignment = Enum.TextXAlignment.Left
+        sub.TextYAlignment = Enum.TextYAlignment.Center
+        sub.TextWrapped = true
+        sub.TextTruncate = Enum.TextTruncate.None
         sub.ZIndex = 81
         sub.Parent = suite
 
@@ -7419,6 +8878,7 @@ ST.setupV40 = function()
             end
             local vw = cam.ViewportSize.X / scale
             local vh = cam.ViewportSize.Y / scale
+            pcall(function() UI_LAYOUT.clampPanelState("advancedSuite") end)
             local pw = math.max(1, suite.Size.X.Offset)
             local ph = math.max(1, suite.Size.Y.Offset)
             local x = (suite.AbsolutePosition.X - parentAbs.X) / scale
@@ -7727,8 +9187,8 @@ ST.setupV40 = function()
 
         local function makeAdvLabel(parent, textValue, order, height, color, bold, size)
             local lbl = Instance.new("TextLabel")
-            lbl.Size = UDim2.new(1, 0, 0, height or 22)
-            lbl.AutomaticSize = Enum.AutomaticSize.None
+            lbl.Size = UDim2.new(1, 0, 0, 0)
+            lbl.AutomaticSize = Enum.AutomaticSize.Y
             lbl.BackgroundTransparency = 1
             lbl.BorderSizePixel = 0
             lbl.Text = textValue or ""
@@ -7740,6 +9200,7 @@ ST.setupV40 = function()
             lbl.TextStrokeTransparency = 0.72
             lbl.TextXAlignment = Enum.TextXAlignment.Left
             lbl.TextYAlignment = Enum.TextYAlignment.Center
+            UI_LAYOUT.applyTextAutoSize(lbl, height or 22)
             lbl.LayoutOrder = order or 1
             lbl.ZIndex = 1501
             lbl.Parent = parent
@@ -7775,6 +9236,8 @@ ST.setupV40 = function()
             pad.PaddingLeft = UDim.new(0, 7)
             pad.PaddingRight = UDim.new(0, 7)
             pad.Parent = card
+
+            UI_LAYOUT.ensureConstraint(card, 0, 34, 100000, 100000)
 
             local layout = Instance.new("UIListLayout")
             layout.FillDirection = Enum.FillDirection.Vertical
@@ -7863,6 +9326,10 @@ ST.setupV40 = function()
                 end
 
                 minimize.Text = minimized and "+" or "−"
+                pcall(function()
+                    UI_LAYOUT.refreshCardSize(card, true)
+                    UI_LAYOUT.queue("advanced-section")
+                end)
             end
 
             -- IMPORTANT: actually apply the default collapsed state.
@@ -7871,6 +9338,15 @@ ST.setupV40 = function()
 
             -- Controls are added to this section AFTER makeAdvSection() returns.
             -- Keep the section collapsed for those later ChildAdded events too.
+            hook(layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+                UI_LAYOUT.markDirty()
+                if card.Parent then
+                    tdf(function()
+                        if card.Parent then pcall(UI_LAYOUT.refreshCardSize, card, true) end
+                    end)
+                end
+            end))
+
             hook(card.ChildAdded:Connect(function(child)
                 if not minimized then return end
                 if child == titleLabel
@@ -7910,7 +9386,8 @@ ST.setupV40 = function()
             opts = opts or {}
             local b = Instance.new("TextButton")
             b.Name = "OPSYXAdvancedControl_" .. tostring(key)
-            b.Size = UDim2.new(1, -2, 0, advButtonHeight())
+            b.Size = UDim2.new(1, -2, 0, 0)
+            b.AutomaticSize = Enum.AutomaticSize.Y
             b.BackgroundColor3 = UI_PANEL_INPUT
             b.BackgroundTransparency = 0.04
             b.BorderSizePixel = 0
@@ -7918,7 +9395,9 @@ ST.setupV40 = function()
             b.TextColor3 = UI_TEXT_PRIMARY
             b.TextSize = opts.textSize or 10
             b.Font = Enum.Font.GothamBold
-            b.TextWrapped = false
+            b.TextWrapped = true
+            b.TextTruncate = Enum.TextTruncate.None
+            b.TextYAlignment = Enum.TextYAlignment.Center
             b.TextXAlignment = Enum.TextXAlignment.Left
             b.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
             b.TextStrokeTransparency = 0.78
@@ -7927,6 +9406,7 @@ ST.setupV40 = function()
             b.LayoutOrder = opts.order or 100
             b.ZIndex = 1510
             b.Parent = section
+            UI_LAYOUT.applyTextAutoSize(b, advButtonHeight())
 
             pcall(function()
                 b:SetAttribute("OPSYXOwned", true)
@@ -8044,11 +9524,15 @@ ST.setupV40 = function()
         end
 
         local function makeAdvDropdown(section, key, label, getter, values, onSelect, order)
-            local menu = Instance.new("Frame")
+            local menu = Instance.new("ScrollingFrame")
             menu.Name = "OPSYXDropdown_" .. tostring(key)
             menu.BackgroundColor3 = UI_PANEL_SOFT
             menu.BackgroundTransparency = 0.01
             menu.BorderSizePixel = 0
+            menu.ScrollBarThickness = 3
+            menu.ScrollingDirection = Enum.ScrollingDirection.Y
+            menu.AutomaticCanvasSize = Enum.AutomaticSize.None
+            menu.CanvasSize = UDim2.new(0,0,0,0)
             menu.Visible = false
             menu.ZIndex = 1700
             menu.Parent = suite
@@ -8084,18 +9568,30 @@ ST.setupV40 = function()
                 local sx, sy = suite.AbsolutePosition.X, suite.AbsolutePosition.Y
                 local bx, by = b.AbsolutePosition.X, b.AbsolutePosition.Y
                 local bw, bh = b.AbsoluteSize.X, b.AbsoluteSize.Y
-                local mw = math.max(180, bw) / scale
-                local mh = (#values * 26) + 8
-                local x = (bx - sx) / scale
-                local y = (by - sy) / scale + bh / scale + 4
                 local sw = math.max(1, suite.AbsoluteSize.X / scale)
                 local sh = math.max(1, suite.AbsoluteSize.Y / scale)
-                if x + mw > sw - 4 then x = math.max(4, sw - mw - 4) end
+                local longest = 0
+                local totalH = 8
+                for i=1,#buttons do
+                    local opt = buttons[i]
+                    if opt and opt.Parent then
+                        longest = math.max(longest, UI_LAYOUT.measureTextWidth(opt.Text, opt.TextSize, opt.Font))
+                        totalH = totalH + math.max(m.touch and 36 or 28,
+                            UI_LAYOUT.measureTextHeight(opt, math.max(80, bw/scale-16), opt.Text, opt.TextSize, opt.Font) + 10) + 2
+                    end
+                end
+                local mw = cl(math.max(180, bw/scale, longest + 28), 150, math.max(150, sw - 8))
+                local maxMenuH = math.max(100, sh - 8)
+                local mh = math.min(totalH, maxMenuH)
+                local x = (bx - sx) / scale
+                local y = (by - sy) / scale + bh / scale + 4
+                if x + mw > sw - 4 then x = sw - mw - 4 end
                 if y + mh > sh - 4 then y = (by - sy) / scale - mh - 4 end
                 x = cl(x, 4, math.max(4, sw - mw - 4))
                 y = cl(y, 4, math.max(4, sh - mh - 4))
                 menu.Size = UDim2.fromOffset(math.floor(mw + 0.5), math.floor(mh + 0.5))
                 menu.Position = UDim2.fromOffset(math.floor(x + 0.5), math.floor(y + 0.5))
+                menu.CanvasSize = UDim2.new(0,0,0,math.max(totalH, mh))
             end
 
             local function setOpen(open)
@@ -8118,7 +9614,8 @@ ST.setupV40 = function()
                 local value = values[i]
                 local option = Instance.new("TextButton")
                 option.Name = "Option" .. tostring(i)
-                option.Size = UDim2.new(1, 0, 0, 24)
+                option.Size = UDim2.new(1, -2, 0, 0)
+                option.AutomaticSize = Enum.AutomaticSize.Y
                 option.BackgroundColor3 = UI_PANEL_INPUT
                 option.BackgroundTransparency = 0.04
                 option.BorderSizePixel = 0
@@ -8127,10 +9624,17 @@ ST.setupV40 = function()
                 option.TextSize = 9
                 option.Font = Enum.Font.GothamMedium
                 option.TextXAlignment = Enum.TextXAlignment.Left
+                option.TextYAlignment = Enum.TextYAlignment.Center
+                option.TextWrapped = true
+                option.TextTruncate = Enum.TextTruncate.None
                 option.AutoButtonColor = false
                 option.ZIndex = 1701
                 option.LayoutOrder = i
                 option.Parent = menu
+                UI_LAYOUT.applyTextAutoSize(option, MOB and 36 or 28)
+                C.hook(UI_LAYOUT.watchText(option, function()
+                    UI_LAYOUT.queue("dropdown-option")
+                end))
                 pcall(function()
                     Instance.new("UICorner", option).CornerRadius = UDim.new(0, 5)
                     local pad = Instance.new("UIPadding")
@@ -8152,9 +9656,10 @@ ST.setupV40 = function()
             end
 
             trackAdvConnection(scroll:GetPropertyChangedSignal("CanvasPosition"):Connect(function()
-                if activeAdvDropdown and activeAdvDropdown.menu == menu then
-                    positionMenu()
-                end
+                if activeAdvDropdown and activeAdvDropdown.menu == menu then positionMenu() end
+            end))
+            trackAdvConnection(list:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+                if activeAdvDropdown and activeAdvDropdown.menu == menu then positionMenu() end
             end))
 
             ADV.dropdown = {key=key, button=b, menu=menu, options=buttons, close=function() setOpen(false) end}
@@ -8202,7 +9707,7 @@ ST.setupV40 = function()
             for i = 1, #ADV.controls do
                 local b = ADV.controls[i]
                 if b and b.Parent then
-                    b.Size = UDim2.new(1, 0, 0, h)
+                    UI_LAYOUT.applyTextAutoSize(b, h)
                 end
             end
             local g = UDim.new(0, advGap())
@@ -9046,7 +10551,7 @@ ST.setupV40 = function()
 
         -- Safety/protection helpers used by the existing lower half.
         local protectStatusLabel = makeAdvLabel(ADV.sections[10], "INTEGRITY: READY", 15, 22, UI_TEXT_PRIMARY, true, 9)
-        local protectStatsLabel = makeAdvLabel(ADV.sections[10], "SAFE OFF", 16, 54, UI_TEXT_MUTED, false, 8)
+        local protectStatsLabel = makeAdvLabel(ADV.sections[10], "SAFE OFF", 16, 40, UI_TEXT_MUTED, false, 8)
         protectStatsLabel.TextYAlignment = Enum.TextYAlignment.Top
 
         local function updateProtectionLabels()
@@ -9523,9 +11028,18 @@ ST.setupV40 = function()
 
         local dash = nil
         toggleDashboard = function()
-            if dash then dash:Destroy();dash=nil;return end
+            if dash then
+                dash:Destroy()
+                dash=nil
+                GUI.dashboard=nil
+                UI_LAYOUT.markDirty()
+                UI_LAYOUT.queue("dashboard-hidden")
+                return
+            end
             dash=Instance.new("TextLabel")
-            dash.Size=UDim2.new(0,330,0,145);dash.AnchorPoint=Vector2.new(1,0.5);dash.Position=UDim2.new(1,-370,0.5,0)
+            dash.Size=UDim2.new(0,330,0,0);dash.AutomaticSize=Enum.AutomaticSize.Y
+            UI_LAYOUT.ensureConstraint(dash,240,110,900,1000)
+            dash.AnchorPoint=Vector2.new(1,0.5);dash.Position=UDim2.new(1,-370,0.5,0)
             dash.BackgroundColor3=UI_PANEL_SOFT;dash.BackgroundTransparency=0.03;dash.BorderSizePixel=0;dash.ZIndex=130;dash.TextColor3=UI_TEXT_PRIMARY
             dash.TextSize=9;dash.Font=Enum.Font.Gotham;dash.TextWrapped=true;dash.TextXAlignment=Enum.TextXAlignment.Left;dash.TextYAlignment=Enum.TextYAlignment.Top
             -- [FIX-9.44-F] Read live globals each frame, not captured upvalues.
@@ -9550,7 +11064,10 @@ ST.setupV40 = function()
                 STATE.performance,
                 histLines)
             dash.Parent=suiteRoot
+            GUI.dashboard=dash
             pcall(function() Instance.new("UICorner",dash).CornerRadius=UDim.new(0,10);local st=Instance.new("UIStroke",dash);st.Color=UI_ACCENT;st.Thickness=1 end)
+            UI_LAYOUT.markDirty()
+            UI_LAYOUT.queue("dashboard-shown")
         end
 
         trackAdvConnection(close.Activated:Connect(function()
@@ -9636,6 +11153,8 @@ ST.setupV40 = function()
             trackAdvConnection(viewportCamera:GetPropertyChangedSignal("ViewportSize"):Connect(function()
                 if not ST.ld then return end
                 pcall(function()
+                    UI_LAYOUT.markDirty()
+                    UI_LAYOUT.queue("advanced-viewport")
                     applyLayout(STATE.layout)
                     clampSuiteToViewport()
                 end)
@@ -9735,14 +11254,33 @@ ST.setupV40()
 -- resize handles after the suite has fully initialized.
 -- ============================================================
 pcall(function()
-    makeResizable(GUI.main, "main", 480, 130, 900, 360)
-    makeResizable(GUI.igPanel, "ignore", 280, 300, 560, 760)
-    makeResizable(GUI.setPanel, "settings", 300, 320, 620, 700)
-    makeResizable(GUI.featureCenter, "featureCenter", 560, 620, 760, 740)
-    makeResizable(GUI.mobilePanel, "mobile", 160, 300, 420, 760)
-    makeResizable(GUI.advancedSuite, "advancedSuite", 420, 360, 760, 600)
+    makeResizable(GUI.main, "main", 280, 130, 900, 840)
+    makeResizable(GUI.igPanel, "ignore", 220, 280, 560, 840)
+    makeResizable(GUI.setPanel, "settings", 260, 260, 620, 840)
+    makeResizable(GUI.featureCenter, "featureCenter", 300, 300, 760, 900)
+    makeResizable(GUI.mobilePanel, "mobile", 150, 250, 420, 840)
+    makeResizable(GUI.advancedSuite, "advancedSuite", 280, 280, 760, 900)
     makeResizable(GUI.restoreBar, "restoreBar", 170, 34, 420, 90)
 
+    local function queueUILayout(reason)
+        UI_LAYOUT.markDirty()
+        UI_LAYOUT.queue(reason or "responsive")
+    end
+    pcall(function()
+        local cam = CAM()
+        if cam and cam.GetPropertyChangedSignal then
+            hook(cam:GetPropertyChangedSignal("ViewportSize"):Connect(function()
+                queueUILayout("viewport")
+            end))
+        end
+    end)
+    pcall(function()
+        if GUI.uiScale and GUI.uiScale.GetPropertyChangedSignal then
+            hook(GUI.uiScale:GetPropertyChangedSignal("Scale"):Connect(function()
+                queueUILayout("ui-scale")
+            end))
+        end
+    end)
 end)
 
 -- ============================================================
@@ -9876,5 +11414,112 @@ function _G.__V94OPSYX_CL()
     v39Log("CLEANUP", "complete")
     _G.__V94OPSYX_LD = nil; _G.__V94OPSYX_CL = nil
 end
-
-print("OPSYX Loaded Enjoy Playing :)")
+print(string.rep("=",62))
+print("  V9.45.3 OPSYX  |  VERTICAL ADVANCED SUITE  |  NO WEBHOOK")
+print("  [FIX-UI-ADV-DECK] Advanced Suite spawns directly below and aligned to Control Deck")
+print("  [NEW-9.45.1] Advanced Suite: 10-section vertical, scrollable, responsive layout")
+print("  [FIX-9.45.1-A] Centralized Advanced Suite control/state synchronization")
+print("  [FIX-9.45.1-B] Managed Advanced Suite connection lifecycle + rebind safety")
+print("  [FIX-9.45.1-C] Crosshair ownership/outline/opacity + duplicate prevention")
+print("  [FIX-9.45.1-D] Validation + OPSYX-only diagnostics/repair")
+print("  All V9.31-V9.43 fixes + V9.44 Bug Fixes & New Features.")
+print("  [FIX-9.44-A]  NEAREST_VISIBLE actually enforces LOS (wc path)")
+print("  [FIX-9.44-B]  Triggerbot sc() uses task.delay, not tw() in tsp")
+print("  [FIX-9.44-C]  Config import validates all numerics with cl()")
+print("  [FIX-9.44-D]  FOV slider clamps S.FV.r at both ends")
+print("  [FIX-9.44-E]  purgeStalePredCache wired into LOSC sweep")
+print("  [FIX-9.44-F]  Dashboard reads live FPS_SHOWN/#PLAYER_LIST")
+print("  [FIX-9.44-G]  espCharacterState evicts HUM_CACHE on Health<=0")
+print("  [FIX-9.44-H]  White-team symmetry: S.AM.whiteAsEnemy toggle")
+print("  [FIX-9.44-I]  Ignore panel sort pushes math.huge to bottom")
+print("  [FIX-9.44-J]  layoutRightDock skips anchor reset on dragged panels")
+print("  [NEW-9.44-1]  AIM ASSIST STRENGTH slider (S.AM.strength 0.0-1.0)")
+print("  [NEW-9.44-2]  TARGET HISTORY ring (last 5 targets, name+part+time)")
+print("  [NEW-9.44-3]  ESP CHAMS fill (S.ES.chamsFill=true solid highlight)")
+print("  [NEW-9.44-4]  KILL STREAK counter (ST.kills, resets on death)")
+print("  [NEW-9.44-5]  QUICK-BIND hold-to-rebind on pill buttons")
+print("  [NEW-9.44-6]  SPECTATOR DETECTION (periodic, status dot warning)")
+print("  [NEW-9.44-7]  SMART JITTER (S.AM.jitter, sub-pixel noise on aim)")
+print("  [COMPAT-1]  ^ operator used for hot-path exponentiation")
+print("  [COMPAT-2]  clearLOSCForChar two-pass (Madium V2, Fluxus)")
+print("  [COMPAT-3]  RAY_FILTER nil-guard respawn (all executors)")
+print("  [COMPAT-4]  isEnemy TeamColor pcall (Madium V2, SynX, SW)")
+print("  [COMPAT-5]  cleanup two-pass loops (Madium V2, Fluxus)")
+print("  [COMPAT-6]  WaitForChild 10s timeout (Madium V2, Krnl, Fluxus)")
+print("  [COMPAT-7]  GetFocusedTextBox pcall (SynX legacy, Krnl, Fluxus)")
+print("  [COMPAT-8]  GetAttribute pcall (SynX legacy, Krnl)")
+print("  [COMPAT-9]  RNG seed 32-bit safe (Krnl/Fluxus 32-bit, Madium V2)")
+print("  [COMPAT-10] Drawing probe removed (Madium V2, Fluxus)")
+print("  [COMPAT-11] flushAimCache dead code removed")
+print("  [COMPAT-12] SetAttribute pcall (SynX legacy, Krnl)")
+print("  [COMPAT-15] ExcludeInstances guarded-write capability detection")
+print("  [FIX-1]     PlayerRemoving clears PART_CACHE_ROOT/HEAD/LOSC")
+print("  [FIX-ESP-FILTER] ESP gate: validity -> ignore -> team -> character -> range")
+print("  [FIX-ESP-LIVE] Ignore/team changes immediately destroy or restore ESP eligibility")
+print("  [FIX-ESP-RESPAWN-RACE] CharacterAdded cleanup is generation-safe")
+print("  [FIX-ESP-CHAR-REMOVE] CharacterRemoving closes stale-ESP removal windows")
+print("  [FIX-ESP-TEAM-FAILCLOSED] ESP team-check fails closed on TeamColor errors")
+print("  [PERF-ESP-TEAMCACHE] Team relationship cache removes repeated ESP TeamColor reads")
+print("  [PERF-ESP-LOWLAG] ESP 15 Hz adaptive / layout bookkeeping rate-gated")
+print("  [FIX-ESP-OWNERSHIP] ESP objects use generation/character ownership checks")
+print("  [HARDEN-ESP-INTEGRITY] ESP update path fails closed on ownership/team drift")
+print("  [FIX-F8-VISIBILITY] F8 toggles the full OPSYX UI including Restore/FPS bar")
+print("  [FIX-ASYNC] Delayed tasks invalidated on unload/re-execution")
+print("  [FIX-DRAG]  Active drag-end connections owned and released")
+print("  [FIX-DRAG-SNAP] First-click anchor transition preserves exact panel position")
+print("  [FIX-CAMERA] LOS cache invalidated on CurrentCamera replacement")
+print("  [FIX-DIAG]  Unsupported Drawing.setfpscap path removed")
+print("  [FIX-DIAG]  tick() removed from RNG seed path")
+print("  [3X-PROTECT] Frame exception containment + 3-fault safe-state tripwire")
+print("  [3X-PROTECT] Async trigger pending watchdog + target post-validation")
+print("  [3X-PROTECT] Single-flight cleanup / unload protection")
+print("  No webhook. No data collection. No outbound networking.")
+print("  Default keys: F1 Aim | F2 ESP | F3 Silent | F4 Trigger | Wall Check=Always ON")
+print("  Default globals: F5 Hold | F6 Center | F7 Hide | F8 Master | F9 Panic | F10 Advanced | RMB=Arm")
+print("  F6: Profiles / Diagnostics / Adaptive FPS / Recovery / UI Scale / ESP Range")
+print("  V9.42.7: compact ESP labels / deterministic hold-aim / unified UI alignment / bounded Advanced Suite cards / OPSYX-only protection")
+print("  V9.43.0: exponential velocity smoothing + aim curve + adaptive LOS + ring-log + NEAREST_VISIBLE + LOW_HEALTH blended score")
+print("  [DEF-9.45.4] Passive protection threshold -> OPSYX-owned Safe Mode circuit breaker")
+print("  V9.45.0 improvements:")
+print("    [NEW-9.45-1]  Anti-cheat detection module (passive game-side heuristics)")
+print("    [NEW-9.45-2]  AC event counter + one-shot notify + red status dot")
+print("    [FIX-9.45-A]  Spectator detection: 8s grace period eliminates false positives")
+print("    [FIX-9.45-B]  espCharacterState: dead humanoid not re-cached after nil-eviction")
+print("    [FIX-9.45-C]  importClipboard: AM.md cap corrected to ESP_MAX_RANGE (1000)")
+print("  V9.44.0 improvements:")
+print("    [FIX-9.44-A]  NEAREST_VISIBLE enforces real LOS visibility gate")
+print("    [FIX-9.44-B]  sc() uses task.delay for precise mouse release timing")
+print("    [FIX-9.44-C]  Config import sanitizes all numeric fields with cl()")
+print("    [FIX-9.44-D]  FOV slider clamp applied at S.FV.r write time")
+print("    [FIX-9.44-E]  purgeStalePredCache called every LOSC sweep cycle")
+print("    [FIX-9.44-F]  Dashboard reads live FPS_SHOWN and #PLAYER_LIST")
+print("    [FIX-9.44-G]  Dead Humanoid evicted from HUM_CACHE on Health<=0")
+print("    [FIX-9.44-H]  White-team mode configurable via S.AM.whiteAsEnemy")
+print("    [FIX-9.44-I]  Ignore sort: math.huge dist pushed to list bottom")
+print("    [FIX-9.44-J]  layoutRightDock skips anchor reset for dragged panels")
+print("    [NEW-9.44-1]  S.AM.strength: aim output amplitude 0.0-1.0 slider")
+print("    [NEW-9.44-2]  ST.targetHistory: last 5 targets in dashboard")
+print("    [NEW-9.44-3]  S.ES.chamsFill: solid-color chams via Highlight fill")
+print("    [NEW-9.44-4]  ST.kills: kill streak counter tracked + shown in dash")
+print("    [NEW-9.44-5]  Long-press pill buttons triggers inline key rebind")
+print("    [NEW-9.44-6]  Spectator detection: status dot turns orange + notify")
+print("    [NEW-9.44-7]  S.AM.jitter: smart sub-pixel jitter on aim output")
+print("  V9.41.1 controls: keybinds configurable | defaults F1-F10")
+print("  V9.39: Safe Mode / Watchdog / Profile Backup / Migration / Log Export")
+print("  V9.45.3 defensive compatibility audit:")
+print("    [HARDEN-9.45.3] Safe Mode preserves configured feature states while stopping active output")
+print("    [HARDEN-9.45.3] Focus loss disarms aim/silent/trigger input and invalidates pending actions")
+print("    [HARDEN-9.45.3] Respawn no longer auto-arms mobile trigger state")
+print("    [HARDEN-9.45.3] Recovery bookkeeping is de-bounced to prevent watchdog/recovery storms")
+print("    [PERF-9.45.3] Frame-time EMA adds adaptive ESP backoff on overloaded frames")
+print("    [HARDEN-9.45.3] Passive AC diagnostics use per-signal cooldowns to reduce repeated false positives")
+print("  V9.45.1 stability audit: math.clamp compatibility + auxiliary UI exclusivity + immediate FOV slider input")
+print("  V9.45.1 stability audit: chams/depth synchronization + event-driven ESP cap + ordered layout normalization")
+print("  V9.45.1 stability audit: Advanced Suite card resizers removed to prevent grid overlap")
+print("  [FIX-TRIPLE-1] AC diagnostic timestamp scope corrected + pattern/service caches")
+print("  [FIX-TRIPLE-2] Removed redundant startup/respawn waits and delayed cleanup")
+print("  [PERF-TRIPLE] Advanced Suite consolidated into the existing main frame scheduler")
+print("  [NEW-TRIPLE] Quick actions: ENABLE RELEVANT / HIDE UI / SHOW UI / REINITIALIZE RUNTIME / PERFORMANCE MODE")
+print("  [SCOPE] Diagnostics remain passive, OPSYX-local, and non-evasive.")
+print("  UNLOAD: _G.__V94OPSYX_CL()")
+print(string.rep("=",62))
