@@ -1,229 +1,5 @@
---  SUITE V9.45.3-DEFENSIVE-STABLE - OPSYX  (FULL AUDIT / UI SAFE / VERTICAL ADVANCED SUITE) 123
---  V9.45.3: defensive compatibility pass; safe-mode state preservation, input disarm, adaptive load control, and AC false-positive suppression.
---  All V9.44.0 features retained. See changelog at bottom.
---
---  [NEW-9.45-1]  ANTI-CHEAT DETECTION MODULE (S.AC.acDetect): passive game-side
---                anti-cheat heuristics. Monitors for unusual RemoteEvent firing
---                rate spikes (flag storms), unexpected Touched/Hit callbacks on
---                invisible kill-parts near the local character, and abnormal
---                CFrame/Velocity writes that suggest server-authoritative bans.
---                Detected events are logged to RUNTIME_LOG and displayed in the
---                dashboard. S.AC.acDetectInterval controls the poll rate (default 3s).
---  [NEW-9.45-2]  AC EVENT COUNTER + NOTIFY: ST.acEvents accumulates detection
---                hits across the session. When the count crosses S.AC.acThreshold
---                (default 5), the status dot turns red and notify() fires once.
---  [FIX-9.45-A]  spectatorCheck: previous implementation counted characterless
---                players unconditionally, flagging bots and waiting-to-spawn players
---                as spectators. Now only counts players whose character is nil for
---                longer than 8 seconds (ST._charNilSince tracks per-player onset).
---  [FIX-9.45-B]  espCharacterState Health<=0 eviction path missed the HUM_CACHE
---                write after a nil-eviction; a fresh FindFirstChildOfClass would
---                immediately re-populate HUM_CACHE with the dead humanoid, silently
---                undoing [FIX-9.44-G]. The fresh hum is now checked before caching.
---  [FIX-9.45-C]  importClipboard (Advanced Suite) applied AM.md with a 5000-stud
---                ceiling instead of the script-wide ESP_MAX_RANGE (1000), allowing
---                a crafted config paste to bypass the range cap. Corrected to
---                cl(tonumber(data.AM.md), 100, ESP_MAX_RANGE).
---
---  [FIX-9.44-A]  NEAREST_VISIBLE mode was identical to DISTANCE; now uses
---                world-space distance after a mandatory LOS check (visibility
---                actually matters in this mode).
---  [FIX-9.44-B]  triggerbot sc() used tw() (task.wait) with a fixed 0.015s
---                sleep inside a pcall-guarded tsp (task.spawn). On executors
---                where tw is the legacy wait() the 0.015s cannot be honoured;
---                replaced with the task.delay path so delay precision is
---                preserved on all executor builds.
---  [FIX-9.44-C]  copyConfig / exportFile / importClipboard serialised only
---                one side of the config (V40 STATE or S.*) but not both
---                consistently, causing round-trip drift on profile reload.
---                Import now validates every numeric range with cl() to prevent
---                malformed JSON from corrupting runtime state.
---  [FIX-9.44-D]  FOV slider upper limit was hard-coded to 500 in the drag
---                handler but S.FV.r had no upper-bound guard; aimbots could
---                call findTarget with fovLimit=500 even when the displayed FOV
---                was lower. Both ends now share ESP_MAX_RANGE as a ceiling and
---                the slider clamp is applied at read-time.
---  [FIX-9.44-E]  purgeStalePredCache was never called; LP table grew without
---                bound on long sessions. Now wired into the existing LOSC sweep.
---  [FIX-9.44-F]  Dashboard auto-update (RenderStepped) formatted FPS_SHOWN and
---                #PLAYER_LIST from upvalues captured at construction time rather
---                than reading the live values each frame. Fixed to reference the
---                live globals.
---  [FIX-9.44-G]  espCharacterState() returned stale valid=true when the
---                humanoid's Health was 0 but HUM_CACHE still held the dead
---                humanoid. Force-evict cache entry on Health <= 0.
---  [FIX-9.44-H]  White-team symmetry: when BOTH players are on team White the
---                old code set enemy=true (both players on no team treated as
---                enemies of each other). A new S.AM.whiteAsEnemy toggle
---                (default true) preserves the old fail-closed behavior while
---                allowing users to flip it for FFA servers.
---  [FIX-9.44-I]  refreshIgnorePanel sorted by dist when igSortNear=true but
---                math.huge entries (offline/no-character players) sorted before
---                real nearby players due to table.sort instability. Now pushes
---                math.huge to the end explicitly.
---  [FIX-9.44-J]  makeDraggable preserved AnchorPoint=(0,0) after first drag but
---                layoutRightDock() resets AnchorPoint to (1,0) on each layout
---                pass, fighting the dragged position. layoutRightDock now skips
---                anchor reset for dragged panels.
---
---  [NEW-9.44-1]  AIM ASSIST STRENGTH slider (0.0-1.0) exposed in Advanced Suite
---                Aimbot card. Scales the smoothing curve's output amplitude
---                independently of S.AM.sm so users can tune "pull strength"
---                without changing the feel of the smooth curve.
---  [NEW-9.44-2]  TARGET HISTORY: last 5 locked targets stored in ST.targetHistory
---                (name + time). Shown in dashboard and Advanced Suite diagnostics.
---  [NEW-9.44-3]  ESP CHAMS (color-fill Highlights): when S.ES.highlight and
---                S.ES.chamsFill=true the Highlight FillColor is set instead of
---                left transparent, giving a solid-color "chams" appearance
---                through walls when depthCheck is off.
---  [NEW-9.44-4]  KILL STREAK COUNTER: ST.kills is now tracked and displayed in
---                the dashboard when S.AC.ks (kill streak display) is enabled.
---                Resets on death/respawn. Kill is detected by target HP reaching 0.
---  [NEW-9.44-5]  QUICK-BIND panel: pressing any pill button for > 0.6s opens
---                a mini rebind dialog for that feature's hotkey without opening
---                the full settings panel.
---  [NEW-9.44-6]  SPECTATOR DETECTION: detects when another player is spectating
---                the local player via a character camera check and warns via
---                notify() / status dot color change. Configurable interval.
---  [NEW-9.44-7]  SMART JITTER: when S.AC.jitter=true and aimbot is firing,
---                adds a randomised sub-pixel walk to the aim output that mimics
---                natural micro-corrections without affecting average accuracy.
---
 -- ============================================================
-
--- ============================================================
---  All fixes from V9.31 through V9.38 are fully retained.
---  V9.37-LOWEND adds low-end CPU/memory optimizations on top of V9.36-COMPAT.
---
---  ============================================================
---  V9.37.1-FIXED (applied by HackerAI code review):
---  [FIX-9.37.1-A] ESP hot path team check was fail-OPEN:
---    `local enemy = S.ES.tc and espTeamEnemyPass(pl) or true`
---    evaluates to `true` whenever espTeamEnemyPass() returns false,
---    so teammates were never invalidated (and were even colored as
---    enemies). Now: `local enemy = true; if S.ES.tc then enemy =
---    espTeamEnemyPass(pl) end` -- the claimed fail-closed behavior
---    actually works.
---  [FIX-9.37.1-B] InputBegan: `if gpd then return end` moved directly
---    after the key-rebind (ST._rb) block so F5/F7/Ctrl+F8 and the
---    F1-F4 feature hotkeys no longer fire on game-processed input.
---    Order is now: rebind -> gpd -> RMB/LMB arming -> F7 -> Ctrl+F8
---    -> F5 -> F1-F4 hotkeys.
---  [FIX-9.37.1-C] refreshIgnorePanel 50 ms force-debounce now DEFERS a
---    trailing rebuild instead of dropping the final call, so the last
---    keystroke/scroll click always renders.
---  [FIX-9.37.1-D] Drag release is now detected by a global
---    UI.InputEnded hook keyed on the ACTIVE_DRAG input object.
---    Per-drag InputObject.Changed release detection removed (pooled
---    InputObjects do not reliably fire Changed; drags could stick).
---  [FIX-9.37.1-E] HUM_CACHE entries are identity-checked
---    (h.Parent == c) in al() and espCharacterState() so a replaced
---    Humanoid inside the same character model cannot poison the cache.
---  [FIX-9.37.1-F] Local `rs` UIStroke shadow in makeToggle renamed to
---    `stroke` (removes shadowing of the rs() name generator).
---  [FIX-9.37.1-G] Restore-bar docked offset clamped; setfpscap(0)
---    normalized to 9999 to match the fps_unlock branch below it.
---  ============================================================
---
---  V9.36-COMPAT additional cross-executor hardening:
---  [COMPAT-1]  math.pow() -> ^ operator to avoid an unnecessary library call;
---              the native Luau exponent operator is used for these hot paths.
---  [COMPAT-2]  clearLOSCForChar(): two-pass pairs-safe deletion
---              (Madium V2 and Fluxus pairs() instability on current-key nil)
---  [COMPAT-3]  los(): RAY_FILTER[1] falls back to WS when ME.Character==nil
---              (all executors during respawn; stricter on Madium V2/SynX)
---  [COMPAT-4]  isEnemy(): TeamColor reads pcall-guarded (Madium V2, SynX,
---              Script-Ware anti-cheat property hook protection)
---  [COMPAT-5]  _G.__V94OPSYX_CL(): CHAR_CONNS/LP/CHARS two-pass cleanup
---              (Madium V2, Fluxus pairs() safety)
---  [COMPAT-6]  WaitForChild("PlayerGui") given 10s timeout in cg() and
---              mobile UI block (Madium V2 early injection, Krnl, Fluxus)
---  [COMPAT-7]  UI:GetFocusedTextBox() pcall-guarded in InputBegan handler
---              (Synapse X legacy, Krnl older builds, Fluxus)
---  [COMPAT-8]  GetAttribute() pcall-guarded in scroll button handlers
---              (Synapse X legacy targets, Krnl older builds)
---  [COMPAT-9]  RNG seed computation overflow-safe for 32-bit Luau builds
---              (Krnl 32-bit, Fluxus 32-bit, older Madium V2)
---  [COMPAT-10] Drawing probe calls removed; type() guard is sufficient
---              (Madium V2 lazy Drawing init, Fluxus)
---  [COMPAT-11] Dead code flushAimCache() removed
---  [COMPAT-12] SetAttribute() calls pcall-guarded in refreshIgnorePanel
---              (same older-client guard as GetAttribute)
---  [FIX-UI-DRAG] Main / Ignore List / Settings / Mobile panels now support
---              mouse + touch dragging with viewport clamping; responsive
---              layout no longer snaps a manually moved panel back.
---  [FIX-HOLD-AIM-IMMEDIATE] RMB hold latches `aiming = true` directly in
---              InputBegan and clears it in InputEnded, removing RenderStepped activation delay.
---  No webhook. No data collection. No outbound networking.
---  [PERF-1] Responsive layout is state/viewport-gated instead of rewriting
---           panel positions every RenderStepped on stable frames.
---  [PERF-2] FOV slider consumes InputObject positions instead of polling the
---           global mouse position every RenderStepped while dragging.
---  [COMPAT-13] RaycastParams prefers ExcludeInstances with legacy fallback.
---  [COMPAT-14] Mouse-helper capability now respects UI.MouseEnabled.
---  [COMPAT-15] Raycast ExcludeInstances support is detected by a guarded write,
---             preventing false-positive capability detection on older clients.
---
---  V9.37-LOWEND optimizations (low-end PC / low-power CPU focus):
---  [PERF-3] forceWallCheck() removed from per-frame RenderStepped; moved to
---           startup and ME.CharacterAdded. Was a no-op write every frame.
---  [PERF-4] fr() (root-part finder) now uses PART_CACHE_ROOT as primary
---           lookup, eliminating repeated FindFirstChild iterations in hot paths.
---  [PERF-5] HUM_CACHE added: al() and ESP Humanoid lookups now cached per
---           character, replacing FindFirstChildOfClass on every scan frame.
---           Cache invalidated on character change, respawn, and removal.
---  [PERF-6] FC.NumSides write removed from per-tick FOV update (was
---           unconditionally writing 64 every tick; set once at init instead).
---           HP color recomputed only when HP ratio changes (1% granularity),
---           eliminating per-tick Color3 allocations when HP is stable.
---  [PERF-7] All panel/slider UI.InputChanged connections consolidated into
---           one shared handler (ACTIVE_DRAG). Previously 5 separate listeners
---           all fired on every mouse-move event. Single dispatcher cuts that
---           to one nil-check per mouse-move when no drag is active.
---  [PERF-8] refreshIgnorePanel force-rebuilds debounced at 50 ms minimum.
---           Prevents burst Instance alloc/destroy on rapid typing or scrolling.
---  [PERF-9] LOSC (wall-check result cache) periodic stale-entry sweep added.
---  [PERF-10] Root/head cache paths no longer return generic fallback parts when
---            a real root/head exists; reduces repeated hierarchy searches.
---  [FIX-ASYNC] Delayed callbacks carry a lifecycle token and self-cancel after unload.
---           Entries older than 5s pruned every 10s to bound table growth on
---           long sessions / high-player servers.
---  [FIX-ESP-FILTER] ESP now enforces validity -> ignore -> team before any
---           character/humanoid/root, distance, projection, or render work.
---           Filtered players are removed immediately and cannot be recreated
---           until they qualify again.
---  [FIX-ESP-LIVE] Ignore-list changes, player Team/TeamColor changes, and
---           LocalPlayer team changes immediately reconcile the ESP set.
---  [FIX-ESP-RESPAWN] Respawn/player removal invalidates stale ESP and cache
---           state so filtered players cannot resurrect old overlays.
---  [FIX-ESP-CHAR-REMOVE] CharacterRemoving closes the death/respawn stale-ESP gap.
---  [FIX-ESP-TEAM-FAILCLOSED] ESP team-check fails closed on protected TeamColor reads.
---  [PERF-ESP-TEAMCACHE] ESP team relationships are cached and invalidated only
---           on Team/TeamColor changes or player removal, eliminating repeated
---           protected TeamColor reads from the periodic ESP hot path.
---  [FIX-ESP-OWNERSHIP] ESP objects are generation/character-owned; stale or
---           reparented overlays are rejected and rebuilt instead of reused.
---  [HARDEN-ESP-INTEGRITY] ESP update path fails closed on ownership/team drift.
---  [PERF-11] Player list is event-synchronized; hot paths no longer allocate
---           a fresh Players:GetPlayers() array for scans/ESP/diagnostics.
---  [PERF-12] Targeting team relations are cached and invalidated on team changes.
---  [PERF-13] Prediction cache objects are updated in place to reduce GC churn.
---  [PERF-14] FOV slider updates directly from InputChanged; no RenderStepped poll.
---  [HARDEN-ESP-ROOT] ESP creation now receives the validated root/humanoid
---                 instead of relying on an undeclared root reference.
---  [FIX-ESP-VISIBILITY] VISIBILITY now clears Drawing extras as well as labels.
---  [ADV-ESP] Smart culling, nearest-player cap, distance fade, graphical
---           health bars, and Highlight depth mode are available as opt-in
---           visual/performance mechanics.
---  [PROTECT-UI-REPAIR] Detached OPSYX ScreenGui is repaired before escalation.
---  [FIX-HOLD-RELEASE-GUARD] stale mouse state cannot re-arm after RMB release.
---  [FIX-HOLD-TOGGLE] enabling hold-aim disables free-running normal aimbot.
---  [FIX-TRIGGER-QUEUE] delayed trigger actions are single-flight, exception-safe,
---           and lifecycle-safe.
--- ============================================================
-
--- ============================================================
--- RE-EXECUTION GUARD
+-- RE-EXECUTION GUARD 2
 -- If OPSYX is already running, unload the previous instance first
 -- so the new execution starts cleanly without duplicate UI/connections.
 -- ============================================================
@@ -241,26 +17,13 @@ _G.__V94OPSYX_LD = true
 -- ============================================================
 -- SERVICES
 -- ============================================================
-local function getServiceSafe(name)
-    local ok, service = pcall(function() return game:GetService(name) end)
-    if ok and service then return service end
-    warn("[OPSYX] Service unavailable: " .. tostring(name))
-    return nil
-end
-
-local Players     = getServiceSafe("Players")
-local RS          = getServiceSafe("RunService")
-local UI          = getServiceSafe("UserInputService")
-local TS          = getServiceSafe("TweenService")
-local HttpService = getServiceSafe("HttpService")
-local WS          = getServiceSafe("Workspace")
-local CG          = getServiceSafe("CoreGui")
-
-if not Players or not RS or not UI or not WS then
-    warn("[OPSYX] Required Roblox services are unavailable; runtime not started.")
-    _G.__V94OPSYX_LD = nil
-    return
-end
+local Players = game:GetService("Players")
+local RS      = game:GetService("RunService")
+local UI      = game:GetService("UserInputService")
+local TS      = game:GetService("TweenService")
+local HttpService = game:GetService("HttpService")
+local WS      = game:GetService("Workspace")
+local CG      = game:GetService("CoreGui")
 
 local ME = Players.LocalPlayer
 if not ME then ME = Players.PlayerAdded:Wait() end
@@ -554,7 +317,6 @@ local S = {
         sanitizeState=true,
         protectionInterval=1.0,
         protectionFaultLimit=3,
-        developerDiagnostics=false,
     },
     V40 = {
         targetPart="Head", priority="CROSSHAIR", sticky=true, stickyMargin=45,
@@ -760,30 +522,7 @@ end
 
 local PILLS = {}
 local CONNS = {}
-local CONN_SET = setmetatable({}, {__mode="k"})
-local OWNED_INSTANCES = setmetatable({}, {__mode="k"})
-
-local function hook(c)
-    if not c then return nil end
-    local okConnected, connected = pcall(function() return c.Connected end)
-    if okConnected and connected == false then return c end
-    if CONN_SET[c] then return c end
-    CONN_SET[c] = true
-    CONNS[#CONNS + 1] = c
-    return c
-end
-
-local function trackOwnedInstance(obj)
-    if obj then OWNED_INSTANCES[obj] = true end
-    return obj
-end
-
-local function safeDestroyInstance(obj)
-    if not obj then return false end
-    OWNED_INSTANCES[obj] = nil
-    return pcall(function() obj:Destroy() end)
-end
-
+local function hook(c) if c then CONNS[#CONNS+1] = c end end
 local GUI = {
     sg=nil, uiScale=nil, main=nil, titleLabel=nil, restoreBar=nil, restoreText=nil,
     igPanel=nil, igStatusLbl=nil, igSearch=nil, igSortBtn=nil,
@@ -954,12 +693,6 @@ local KEYBIND_ORDER = {
     "feature", "hide", "master", "panic", "advanced",
 }
 
-local DEFAULT_KEYBINDS = {
-    am="F1", es="F2", sl="F3", tr="F4",
-    hold="F5", feature="F6", hide="F7", master="F8",
-    panic="F9", advanced="F10",
-}
-
 local function sanitizeKeybindTable(source)
     local clean = {}
     local used = {}
@@ -969,8 +702,7 @@ local function sanitizeKeybindTable(source)
     -- executor builds where pairs() iteration order is not guaranteed.
     for i = 1, #KEYBIND_ORDER do
         local keyName = KEYBIND_ORDER[i]
-        local defaultValue = S.KB[keyName]
-        if defaultValue == nil then defaultValue = DEFAULT_KEYBINDS[keyName] or "" end
+        local defaultValue = S.KB[keyName] or ""
         local candidate = src[keyName]
         if type(candidate) ~= "string" then
             candidate = defaultValue
@@ -2420,11 +2152,6 @@ registerFeatureToggle("runtimePaused", function() return S.V40.runtimePaused end
     S.V40.runtimePaused = v
 end)
 
-registerFeatureToggle("developerDiagnostics", function() return S.V39.developerDiagnostics == true end, function(v)
-    S.V39.developerDiagnostics = v == true
-    ST.__expertSetDebug(v == true)
-end)
-
 local LAYOUT_CACHE = {
     vw = 0, vh = 0, scale = 0,
     mainVisible = nil, ignoreVisible = nil, settingsVisible = nil,
@@ -3682,7 +3409,6 @@ local function cg()
     C.GUI.sg = screenGui
     if not ST.ourGuis then ST.ourGuis = {} end
     table.insert(ST.ourGuis, screenGui)
-    trackOwnedInstance(screenGui)
 
     local scaleContainer = Instance.new("Frame")
     scaleContainer.Name = "OPSYXScaleRoot"
@@ -4592,8 +4318,7 @@ local function cg()
                    fpsHigh=C.S.V39.fpsHigh, layoutLocked=C.S.V39.layoutLocked, snapPanels=C.S.V39.snapPanels,
                    profileAutoBackup=C.S.V39.profileAutoBackup, profileAutoMigration=C.S.V39.profileAutoMigration,
                    protection=C.S.V39.protection, detectIntegrity=C.S.V39.detectIntegrity, sanitizeState=C.S.V39.sanitizeState,
-                   protectionInterval=C.S.V39.protectionInterval, protectionFaultLimit=C.S.V39.protectionFaultLimit,
-                   developerDiagnostics=C.S.V39.developerDiagnostics},
+                   protectionInterval=C.S.V39.protectionInterval, protectionFaultLimit=C.S.V39.protectionFaultLimit},
             uiScale = (C.GUI.uiScale and C.GUI.uiScale.Scale) or 1,
             adaptive = FC_ADAPTIVE,
             uiPositions = ST.uiPositions,
@@ -4748,8 +4473,6 @@ local function cg()
             ok, why = numRange(d.V39, "protectionInterval", 0.5, 5, "Invalid protection interval")
             if not ok then return false, why end
             ok, why = numRange(d.V39, "protectionFaultLimit", 1, 10, "Invalid protection fault limit")
-            if not ok then return false, why end
-            ok, why = boolField(d.V39, "developerDiagnostics", "Invalid developer diagnostics flag")
             if not ok then return false, why end
         end
         if d.uiScale ~= nil then
@@ -5120,7 +4843,6 @@ local function cg()
                 if C.S.V39[k] ~= nil and type(v) == type(C.S.V39[k]) then C.S.V39[k]=v end
             end
         end
-        ST.__expertSetDebug(C.S.V39.developerDiagnostics == true)
         local profileSafeMode = C.S.V39.safeMode == true
         ST.v39.safeMode = false
         if profileSafeMode then
@@ -5704,7 +5426,6 @@ if MOB then
 
         if not ST.ourGuis then ST.ourGuis = {} end
         table.insert(ST.ourGuis, tg)
-        trackOwnedInstance(tg)
 
         local mPanel = Instance.new("Frame")
         mPanel.Name = rs(10)
@@ -6328,132 +6049,6 @@ ST.OPSYX_SURFACE = {
     repeatedFaults=0, lastFault="", lastFaultT=0
 }
 
--- ============================================================
--- EXPERT PROTECTION / STABILITY LAYER
--- Defensive only: protects OPSYX-owned runtime state and lifecycle.
--- ============================================================
-ST.EXPERT_PROTECT = {
-    enabled=true, debug=false, cleanupStarted=false,
-    featureFaultWindow=10, featureFaultLimit=3, features={}, connections={},
-    lastDiagnosticT=0, lastDiagnostic="",
-}
-
-local function expertNow() return os.clock() end
-
-local function expertLog(category, message)
-    local ep = ST.EXPERT_PROTECT
-    local msg = tostring(message or "")
-    ep.lastDiagnostic, ep.lastDiagnosticT = msg, expertNow()
-    if S.V39.developerDiagnostics == true then v39Log(category or "EXPERT", msg) end
-    if ep.debug then warn("[OPSYX][EXPERT] " .. msg) end
-end
-
-function ST.__expertSetDebug(enabled)
-    ST.EXPERT_PROTECT.debug = enabled == true
-    if ST.EXPERT_PROTECT.debug then expertLog("EXPERT", "Developer diagnostics enabled") end
-    return ST.EXPERT_PROTECT.debug
-end
-
-function ST.__expertConnect(tag, signal, callback)
-    local ep = ST.EXPERT_PROTECT
-    if not ep.enabled then return nil end
-    local key = tostring(tag or "connection")
-    local old = ep.connections[key]
-    if old then pcall(function() if old.Connected then old:Disconnect() end end) end
-    ep.connections[key] = nil
-    if not signal or type(signal.Connect) ~= "function" then
-        expertLog("DEPENDENCY", "Signal unavailable: " .. key)
-        return nil
-    end
-    local ok, conn = pcall(function() return signal:Connect(callback) end)
-    if not ok or not conn then
-        expertLog("CONNECTION", key .. " connect failed: " .. tostring(conn))
-        return nil
-    end
-    ep.connections[key] = conn
-    hook(conn)
-    return conn
-end
-
-function ST.__expertDisconnect(tag)
-    local key = tostring(tag or "connection")
-    local ep = ST.EXPERT_PROTECT
-    local conn = ep.connections[key]
-    ep.connections[key] = nil
-    if conn then pcall(function() conn:Disconnect() end) end
-end
-
-function ST.__expertFeatureCall(featureName, callback, toggleName)
-    local ep = ST.EXPERT_PROTECT
-    if not ep.enabled then return pcall(callback) end
-    local name = tostring(featureName or "FEATURE")
-    local rec = ep.features[name] or {faults=0, windowT=0, total=0, disabled=false, lastError="", lastErrorT=0}
-    ep.features[name] = rec
-    local ok, err = pcall(callback)
-    if ok then
-        if rec.faults > 0 and expertNow() - rec.windowT > ep.featureFaultWindow then rec.faults, rec.windowT = 0, 0 end
-        return true
-    end
-    local now = expertNow()
-    if rec.windowT == 0 or now - rec.windowT > ep.featureFaultWindow then rec.windowT, rec.faults = now, 0 end
-    rec.faults, rec.total, rec.lastError, rec.lastErrorT = rec.faults + 1, rec.total + 1, tostring(err), now
-    ST.v39.lastError, ST.v39.lastErrorT = rec.lastError, now
-    ST.fcStats.errors = (ST.fcStats.errors or 0) + 1
-    v39SetHealth(name, "DEGRADED", rec.lastError)
-    expertLog("FEATURE_ERROR", name .. ": " .. rec.lastError)
-    if rec.faults >= ep.featureFaultLimit and not rec.disabled then
-        rec.disabled = true
-        if toggleName and type(setFeatureToggle) == "function" then pcall(setFeatureToggle, toggleName, false) end
-        if name == "AIMBOT" then
-            aiming=false; ST.arm=false; ST.htArm=false; ST.saArm=false; pcall(flushTarget)
-        elseif name == "TRIGGER" then
-            ST.tbPending=false; ST.tbPendingAt=0; ST.mobArm=false
-        elseif name == "ESP" then
-            pcall(destroyAllInstanceESP)
-        elseif name == "SILENT" then
-            ST.saArm=false
-        elseif name == "FOV" then
-            pcall(function() if FC then FC.Visible=false end end)
-        end
-        v39SetHealth(name, "SAFE", "Auto-disabled after repeated runtime errors")
-        v39Recovery("EXPERT_AUTO_DISABLE:" .. name)
-        expertLog("RECOVERY", name .. " auto-disabled after repeated errors")
-    end
-    return false, err
-end
-
-function ST.__expertValidateRuntime()
-    if not ST.EXPERT_PROTECT.enabled then return true end
-    local ok = pcall(ST.__opsyxProtectionClamp)
-    if not ok then ST.__opsyxProtectionFault("CONFIG_SANITIZE_FAILED", true); return false end
-    if type(S.KB) ~= "table" then ST.__opsyxProtectionFault("KEYBIND_STATE_MISSING", true); return false end
-    local clean = sanitizeKeybindTable(S.KB)
-    local changed = false
-    for i=1,#KEYBIND_ORDER do local k=KEYBIND_ORDER[i]; if S.KB[k] ~= clean[k] then changed=true; break end end
-    if changed then
-        S.KB = clean
-        ST.v39.profileDirty = true; ST.v39.profileDirtyReason = "Keybind state sanitized"
-        expertLog("CONFIG", "Malformed/duplicate keybinds sanitized")
-    end
-    return true
-end
-
-function ST.__expertDiagnosticsSnapshot()
-    local ep = ST.EXPERT_PROTECT
-    local parts = {}
-    local names = {"AIMBOT","ESP","SILENT","TRIGGER","FOV","INPUT","UI","CONFIG","CLEANUP","WATCHDOG"}
-    for i=1,#names do
-        local n=names[i]; local rec=ep.features[n]; local hs=FEATURE_HEALTH[n]
-        local state=type(hs)=="table" and hs.state or tostring(hs or "UNKNOWN")
-        parts[#parts+1] = n .. ":" .. state .. (rec and rec.faults>0 and "("..tostring(rec.faults)..")" or "")
-    end
-    local connN=0; for _,c in pairs(ep.connections) do if c then connN=connN+1 end end
-    local instN=0; for obj in pairs(OWNED_INSTANCES) do if obj then instN=instN+1 end end
-    return string.format("EXPERT %s | DEBUG %s\n%s\nCONNS %d | INSTANCES %d | RECOVERIES %d | CHECKS %d\nLAST ERROR: %s\nLAST DIAG: %s",
-        ep.enabled and "ON" or "OFF", ep.debug and "ON" or "OFF", table.concat(parts," | "), connN, instN,
-        ST.fcStats.recoveries or 0, ST.v39.protectChecks or 0, tostring(ST.v39.lastError or "NONE"):sub(1,100), tostring(ep.lastDiagnostic or "NONE"):sub(1,100))
-end
-
 function ST.__opsyxProtectionPublish()
     ST.v39.protectLastMs = tonumber(ST.OPSYX_SURFACE.lastMs) or 0
     ST.v39.protectSlow = tonumber(ST.OPSYX_SURFACE.slowPasses) or 0
@@ -6680,11 +6275,6 @@ function ST.__opsyxProtectionClamp()
         S.V40.performance = perf
     end
 
-    if type(S.V39.developerDiagnostics) ~= "boolean" then
-        S.V39.developerDiagnostics = false
-        repaired = true
-    end
-
     if not repaired then return false end
     ST.OPSYX_PROTECT.repairs = ST.OPSYX_PROTECT.repairs + 1
     ST.OPSYX_PROTECT.last = "STATE_SANITIZED"
@@ -6735,7 +6325,7 @@ function ST.__opsyxProtectionIntegrityTick()
     end
 
     if S.V39.sanitizeState ~= false then
-        ST.__expertValidateRuntime()
+        ST.__opsyxProtectionClamp()
     end
 
     -- Repair a detached OPSYX UI root before escalating to a protection fault.
@@ -6910,7 +6500,7 @@ ST.v39.layoutUiT = 0
 ST.v39.espLabelT = 0
 
 ST.v39.okLoop, ST.v39.errLoop = pcall(function()
-    ST.v39.loopConn = ST.__expertConnect("MAIN_LOOP", RS.RenderStepped, function(dt)
+    ST.v39.loopConn = RS.RenderStepped:Connect(function(dt)
         local __guardOk, __guardErr = pcall(function()
         if not ST.ld then
             if ST.v39.loopConn then ST.v39.loopConn:Disconnect() end
@@ -7033,7 +6623,7 @@ ST.v39.okLoop, ST.v39.errLoop = pcall(function()
                 FC.Transparency = S.FV.tr
             end
             if FC.Visible ~= show then FC.Visible = show end
-        end, "fov")
+        end)
 
         pcall(function()
             if not FTL then return end
@@ -7591,17 +7181,9 @@ ST.v39.okLoop, ST.v39.errLoop = pcall(function()
             pcall(ST.v40FrameTick, nowFrame)
         end
 
-        if not S.V40.runtimePaused then
-            if S.AM.on or holdToAimEnabled or ST.holdReleased then
-                ST.__expertFeatureCall("AIMBOT", function() doAimbot(dt) end, "aim")
-            end
-            if S.SL.on and ST.saArm then
-                ST.__expertFeatureCall("SILENT", function() sa(dt) end, "silent")
-            end
-            if S.TR.on and (ST.arm or ST.mobArm) then
-                ST.__expertFeatureCall("TRIGGER", function() tb() end, "trigger")
-            end
-        end
+        if S.AM.on or holdToAimEnabled or ST.holdReleased then pcall(doAimbot, dt) end
+        if S.SL.on and ST.saArm then pcall(sa, dt) end
+        if S.TR.on and (ST.arm or ST.mobArm) then pcall(tb) end
 
         -- [PERF-9.45.3] Frame-time feedback adds a fast overload signal.
         -- It only influences optional ESP cadence; user configuration stays intact.
@@ -7712,14 +7294,6 @@ ST.oca = function(plr)
     end)
 end
 
--- Initialize the event helper before any initial player pass can call ST.oca.
-local EVENTS_OK, EVENTS_ERR = pcall(ST.setupEvents)
-if not EVENTS_OK then
-    v39SetHealth("INPUT", "DEGRADED", tostring(EVENTS_ERR))
-    ST.v39.lastError = tostring(EVENTS_ERR)
-    v39Log("ERROR", "EVENT_SETUP: " .. tostring(EVENTS_ERR))
-end
-
 hook(ME.CharacterAdded:Connect(function()
     -- [PERF-3] Wall Check invariant re-enforced here (replaces per-frame call).
     forceWallCheck()
@@ -7824,6 +7398,7 @@ hook(Players.PlayerRemoving:Connect(function(pl)
     end
 end))
 end
+ST.setupEvents()
 
 -- ============================================================
 -- V9.41.1 ADVANCED SUITE
@@ -9395,7 +8970,7 @@ ST.setupV40 = function()
             if STATE.crosshair then active[#active+1] = "CROSSHAIR" end
             if #active == 0 then active[1] = "NONE" end
             ADV.diagnostics.Text = string.format(
-                "UI STATUS: %s\nFEATURE STATUS: AIM %s • ESP %s • CROSSHAIR %s\nACTIVE FEATURES: %s\nMANAGED CONNECTIONS: %d\nCONFIG STATUS: S.AM / S.ES / S.V40 VALIDATED\nLAST ERROR: %s\nLAST UPDATE: %s\nCLEANUP STATUS: %s\nEXPERT: %s",
+                "UI STATUS: %s\nFEATURE STATUS: AIM %s • ESP %s • CROSSHAIR %s\nACTIVE FEATURES: %s\nMANAGED CONNECTIONS: %d\nCONFIG STATUS: S.AM / S.ES / S.V40 VALIDATED\nLAST ERROR: %s\nLAST UPDATE: %s\nCLEANUP STATUS: %s",
                 (suite.Parent and scroll.Parent == suite and content.Parent == scroll) and "OK" or "WARNING",
                 S.AM.on and "ON" or "OFF",
                 S.ES.on and "ON" or "OFF",
@@ -9404,14 +8979,11 @@ ST.setupV40 = function()
                 #ADV_CONNS,
                 tostring(d.lastError or "NONE"):sub(1, 80),
                 os.date("%H:%M:%S"),
-                tostring(d.cleanupState or "IDLE"),
-                ST.__expertDiagnosticsSnapshot()
+                tostring(d.cleanupState or "IDLE")
             )
             ADV.diagLastUpdate = os.clock()
             notify("Diagnostics complete")
         end, {order=20})
-
-        makeAdvButton(diagCard, "diag_developer", "DEVELOPER DIAGNOSTICS", nil, {order=25, boolKey="developerDiagnostics", toggleName="developerDiagnostics"})
 
         makeAdvButton(diagCard, "diag_repair", "REPAIR UI STATE", function()
             if suite.Parent == nil then
@@ -10320,12 +9892,7 @@ ST.setupV40 = function()
         if GUI.advancedSuite then pcall(function() GUI.advancedSuite:Destroy() end); GUI.advancedSuite=nil end
     end
 end
-local V40_INIT_OK, V40_INIT_ERR = pcall(ST.setupV40)
-if not V40_INIT_OK then
-    v39SetHealth("UI", "DEGRADED", tostring(V40_INIT_ERR))
-    ST.v39.lastError = tostring(V40_INIT_ERR)
-    v39Log("ERROR", "ADVANCED_SUITE_INIT: " .. tostring(V40_INIT_ERR))
-end
+ST.setupV40()
 
 -- ============================================================
 -- RESIZE HANDLES: stable all-box resizing
@@ -10381,10 +9948,9 @@ end)
 -- CLEANUP
 -- ============================================================
 function _G.__V94OPSYX_CL()
-    -- [EXPERT-CLEANUP] Single-flight shutdown guard.
-    if ST.EXPERT_PROTECT and ST.EXPERT_PROTECT.cleanupStarted then return end
+    -- [3X-PROTECT-CLEANUP] Cleanup is single-flight. Re-entrant unload calls
+    -- from watchdog/UI/old instances must never race the same connection tables.
     if ST.v39.cleanupState == "RUNNING" then return end
-    if ST.EXPERT_PROTECT then ST.EXPERT_PROTECT.cleanupStarted = true end
     if ST.v39.cleanupState == "COMPLETE" and not ST.ld then return end
     ST.v39.cleanupState = "RUNNING"
     v39Log("CLEANUP", "begin")
@@ -10424,12 +9990,6 @@ function _G.__V94OPSYX_CL()
     for i = 1, #connsSnapshot do
         pcall(function() connsSnapshot[i]:Disconnect() end)
     end
-    for connKey, conn in pairs(ST.EXPERT_PROTECT and ST.EXPERT_PROTECT.connections or {}) do
-        pcall(function() if conn and conn.Connected then conn:Disconnect() end end)
-        if ST.EXPERT_PROTECT then ST.EXPERT_PROTECT.connections[connKey] = nil end
-    end
-    for conn in pairs(CONN_SET) do CONN_SET[conn] = nil end
-    for obj in pairs(OWNED_INSTANCES) do safeDestroyInstance(obj) end
     -- [COMPAT-5] Two-pass CHAR_CONNS cleanup: snapshot keys first, then
     -- disconnect and nil. Avoids pairs()-mutation instability on Madium V2
     -- and Fluxus executor Luau forks.
@@ -10478,123 +10038,8 @@ function _G.__V94OPSYX_CL()
     clearPartCache(); flushTarget()
     for i = 1, #PLAYER_LIST do PLAYER_INDEX[PLAYER_LIST[i]] = nil end
     PLAYER_LIST = {}
-    if ST.EXPERT_PROTECT then
-        ST.EXPERT_PROTECT.features = {}
-        ST.EXPERT_PROTECT.lastDiagnostic = "cleanup complete"
-    end
-    ST.ourGuis = nil
     ST.v39.cleanupState = "COMPLETE"
     v39Log("CLEANUP", "complete")
     _G.__V94OPSYX_LD = nil; _G.__V94OPSYX_CL = nil
 end
-print(string.rep("=",62))
-print("  V9.45.3 OPSYX  |  VERTICAL ADVANCED SUITE  |  NO WEBHOOK")
-print("  [FIX-UI-ADV-DECK] Advanced Suite spawns directly below and aligned to Control Deck")
-print("  [NEW-9.45.1] Advanced Suite: 10-section vertical, scrollable, responsive layout")
-print("  [FIX-9.45.1-A] Centralized Advanced Suite control/state synchronization")
-print("  [FIX-9.45.1-B] Managed Advanced Suite connection lifecycle + rebind safety")
-print("  [FIX-9.45.1-C] Crosshair ownership/outline/opacity + duplicate prevention")
-print("  [FIX-9.45.1-D] Validation + OPSYX-only diagnostics/repair")
-print("  All V9.31-V9.43 fixes + V9.44 Bug Fixes & New Features.")
-print("  [FIX-9.44-A]  NEAREST_VISIBLE actually enforces LOS (wc path)")
-print("  [FIX-9.44-B]  Triggerbot sc() uses task.delay, not tw() in tsp")
-print("  [FIX-9.44-C]  Config import validates all numerics with cl()")
-print("  [FIX-9.44-D]  FOV slider clamps S.FV.r at both ends")
-print("  [FIX-9.44-E]  purgeStalePredCache wired into LOSC sweep")
-print("  [FIX-9.44-F]  Dashboard reads live FPS_SHOWN/#PLAYER_LIST")
-print("  [FIX-9.44-G]  espCharacterState evicts HUM_CACHE on Health<=0")
-print("  [FIX-9.44-H]  White-team symmetry: S.AM.whiteAsEnemy toggle")
-print("  [FIX-9.44-I]  Ignore panel sort pushes math.huge to bottom")
-print("  [FIX-9.44-J]  layoutRightDock skips anchor reset on dragged panels")
-print("  [NEW-9.44-1]  AIM ASSIST STRENGTH slider (S.AM.strength 0.0-1.0)")
-print("  [NEW-9.44-2]  TARGET HISTORY ring (last 5 targets, name+part+time)")
-print("  [NEW-9.44-3]  ESP CHAMS fill (S.ES.chamsFill=true solid highlight)")
-print("  [NEW-9.44-4]  KILL STREAK counter (ST.kills, resets on death)")
-print("  [NEW-9.44-5]  QUICK-BIND hold-to-rebind on pill buttons")
-print("  [NEW-9.44-6]  SPECTATOR DETECTION (periodic, status dot warning)")
-print("  [NEW-9.44-7]  SMART JITTER (S.AM.jitter, sub-pixel noise on aim)")
-print("  [COMPAT-1]  ^ operator used for hot-path exponentiation")
-print("  [COMPAT-2]  clearLOSCForChar two-pass (Madium V2, Fluxus)")
-print("  [COMPAT-3]  RAY_FILTER nil-guard respawn (all executors)")
-print("  [COMPAT-4]  isEnemy TeamColor pcall (Madium V2, SynX, SW)")
-print("  [COMPAT-5]  cleanup two-pass loops (Madium V2, Fluxus)")
-print("  [COMPAT-6]  WaitForChild 10s timeout (Madium V2, Krnl, Fluxus)")
-print("  [COMPAT-7]  GetFocusedTextBox pcall (SynX legacy, Krnl, Fluxus)")
-print("  [COMPAT-8]  GetAttribute pcall (SynX legacy, Krnl)")
-print("  [COMPAT-9]  RNG seed 32-bit safe (Krnl/Fluxus 32-bit, Madium V2)")
-print("  [COMPAT-10] Drawing probe removed (Madium V2, Fluxus)")
-print("  [COMPAT-11] flushAimCache dead code removed")
-print("  [COMPAT-12] SetAttribute pcall (SynX legacy, Krnl)")
-print("  [COMPAT-15] ExcludeInstances guarded-write capability detection")
-print("  [FIX-1]     PlayerRemoving clears PART_CACHE_ROOT/HEAD/LOSC")
-print("  [FIX-ESP-FILTER] ESP gate: validity -> ignore -> team -> character -> range")
-print("  [FIX-ESP-LIVE] Ignore/team changes immediately destroy or restore ESP eligibility")
-print("  [FIX-ESP-RESPAWN-RACE] CharacterAdded cleanup is generation-safe")
-print("  [FIX-ESP-CHAR-REMOVE] CharacterRemoving closes stale-ESP removal windows")
-print("  [FIX-ESP-TEAM-FAILCLOSED] ESP team-check fails closed on TeamColor errors")
-print("  [PERF-ESP-TEAMCACHE] Team relationship cache removes repeated ESP TeamColor reads")
-print("  [PERF-ESP-LOWLAG] ESP 15 Hz adaptive / layout bookkeeping rate-gated")
-print("  [FIX-ESP-OWNERSHIP] ESP objects use generation/character ownership checks")
-print("  [HARDEN-ESP-INTEGRITY] ESP update path fails closed on ownership/team drift")
-print("  [FIX-F8-VISIBILITY] F8 toggles the full OPSYX UI including Restore/FPS bar")
-print("  [FIX-ASYNC] Delayed tasks invalidated on unload/re-execution")
-print("  [FIX-DRAG]  Active drag-end connections owned and released")
-print("  [FIX-DRAG-SNAP] First-click anchor transition preserves exact panel position")
-print("  [FIX-CAMERA] LOS cache invalidated on CurrentCamera replacement")
-print("  [FIX-DIAG]  Unsupported Drawing.setfpscap path removed")
-print("  [FIX-DIAG]  tick() removed from RNG seed path")
-print("  [3X-PROTECT] Frame exception containment + 3-fault safe-state tripwire")
-print("  [3X-PROTECT] Async trigger pending watchdog + target post-validation")
-print("  [3X-PROTECT] Single-flight cleanup / unload protection")
-print("  [EXPERT-PROTECT] Connection dedupe + owned-instance tracking + feature circuit breakers")
-print("  [EXPERT-PROTECT] Runtime config sanitization + optional developer diagnostics")
-print("  No webhook. No data collection. No outbound networking.")
-print("  Default keys: F1 Aim | F2 ESP | F3 Silent | F4 Trigger | Wall Check=Always ON")
-print("  Default globals: F5 Hold | F6 Center | F7 Hide | F8 Master | F9 Panic | F10 Advanced | RMB=Arm")
-print("  F6: Profiles / Diagnostics / Adaptive FPS / Recovery / UI Scale / ESP Range")
-print("  V9.42.7: compact ESP labels / deterministic hold-aim / unified UI alignment / bounded Advanced Suite cards / OPSYX-only protection")
-print("  V9.43.0: exponential velocity smoothing + aim curve + adaptive LOS + ring-log + NEAREST_VISIBLE + LOW_HEALTH blended score")
-print("  [DEF-9.45.4] Passive protection threshold -> OPSYX-owned Safe Mode circuit breaker")
-print("  V9.45.0 improvements:")
-print("    [NEW-9.45-1]  Anti-cheat detection module (passive game-side heuristics)")
-print("    [NEW-9.45-2]  AC event counter + one-shot notify + red status dot")
-print("    [FIX-9.45-A]  Spectator detection: 8s grace period eliminates false positives")
-print("    [FIX-9.45-B]  espCharacterState: dead humanoid not re-cached after nil-eviction")
-print("    [FIX-9.45-C]  importClipboard: AM.md cap corrected to ESP_MAX_RANGE (1000)")
-print("  V9.44.0 improvements:")
-print("    [FIX-9.44-A]  NEAREST_VISIBLE enforces real LOS visibility gate")
-print("    [FIX-9.44-B]  sc() uses task.delay for precise mouse release timing")
-print("    [FIX-9.44-C]  Config import sanitizes all numeric fields with cl()")
-print("    [FIX-9.44-D]  FOV slider clamp applied at S.FV.r write time")
-print("    [FIX-9.44-E]  purgeStalePredCache called every LOSC sweep cycle")
-print("    [FIX-9.44-F]  Dashboard reads live FPS_SHOWN and #PLAYER_LIST")
-print("    [FIX-9.44-G]  Dead Humanoid evicted from HUM_CACHE on Health<=0")
-print("    [FIX-9.44-H]  White-team mode configurable via S.AM.whiteAsEnemy")
-print("    [FIX-9.44-I]  Ignore sort: math.huge dist pushed to list bottom")
-print("    [FIX-9.44-J]  layoutRightDock skips anchor reset for dragged panels")
-print("    [NEW-9.44-1]  S.AM.strength: aim output amplitude 0.0-1.0 slider")
-print("    [NEW-9.44-2]  ST.targetHistory: last 5 targets in dashboard")
-print("    [NEW-9.44-3]  S.ES.chamsFill: solid-color chams via Highlight fill")
-print("    [NEW-9.44-4]  ST.kills: kill streak counter tracked + shown in dash")
-print("    [NEW-9.44-5]  Long-press pill buttons triggers inline key rebind")
-print("    [NEW-9.44-6]  Spectator detection: status dot turns orange + notify")
-print("    [NEW-9.44-7]  S.AM.jitter: smart sub-pixel jitter on aim output")
-print("  V9.41.1 controls: keybinds configurable | defaults F1-F10")
-print("  V9.39: Safe Mode / Watchdog / Profile Backup / Migration / Log Export")
-print("  V9.45.3 defensive compatibility audit:")
-print("    [HARDEN-9.45.3] Safe Mode preserves configured feature states while stopping active output")
-print("    [HARDEN-9.45.3] Focus loss disarms aim/silent/trigger input and invalidates pending actions")
-print("    [HARDEN-9.45.3] Respawn no longer auto-arms mobile trigger state")
-print("    [HARDEN-9.45.3] Recovery bookkeeping is de-bounced to prevent watchdog/recovery storms")
-print("    [PERF-9.45.3] Frame-time EMA adds adaptive ESP backoff on overloaded frames")
-print("    [HARDEN-9.45.3] Passive AC diagnostics use per-signal cooldowns to reduce repeated false positives")
-print("  V9.45.1 stability audit: math.clamp compatibility + auxiliary UI exclusivity + immediate FOV slider input")
-print("  V9.45.1 stability audit: chams/depth synchronization + event-driven ESP cap + ordered layout normalization")
-print("  V9.45.1 stability audit: Advanced Suite card resizers removed to prevent grid overlap")
-print("  [FIX-TRIPLE-1] AC diagnostic timestamp scope corrected + pattern/service caches")
-print("  [FIX-TRIPLE-2] Removed redundant startup/respawn waits and delayed cleanup")
-print("  [PERF-TRIPLE] Advanced Suite consolidated into the existing main frame scheduler")
-print("  [NEW-TRIPLE] Quick actions: ENABLE RELEVANT / HIDE UI / SHOW UI / REINITIALIZE RUNTIME / PERFORMANCE MODE")
-print("  [SCOPE] Diagnostics remain passive, OPSYX-local, and non-evasive.")
-print("  UNLOAD: _G.__V94OPSYX_CL()")
-print(string.rep("=",62))
+print("OPSYX Loaded")
