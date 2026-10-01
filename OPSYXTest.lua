@@ -1,4 +1,4 @@
---  SUITE V9.45.3-DEFENSIVE-STABLE - OPSYX  (FULL AUDIT / UI SAFE / VERTICAL ADVANCED SUITE) 1
+--  SUITE V9.45.3-DEFENSIVE-STABLE - OPSYX  (FULL AUDIT / UI SAFE / VERTICAL ADVANCED SUITE) 123
 --  V9.45.3: defensive compatibility pass; safe-mode state preservation, input disarm, adaptive load control, and AC false-positive suppression.
 --  All V9.44.0 features retained. See changelog at bottom.
 --
@@ -241,13 +241,26 @@ _G.__V94OPSYX_LD = true
 -- ============================================================
 -- SERVICES
 -- ============================================================
-local Players = game:GetService("Players")
-local RS      = game:GetService("RunService")
-local UI      = game:GetService("UserInputService")
-local TS      = game:GetService("TweenService")
-local HttpService = game:GetService("HttpService")
-local WS      = game:GetService("Workspace")
-local CG      = game:GetService("CoreGui")
+local function getServiceSafe(name)
+    local ok, service = pcall(function() return game:GetService(name) end)
+    if ok and service then return service end
+    warn("[OPSYX] Service unavailable: " .. tostring(name))
+    return nil
+end
+
+local Players     = getServiceSafe("Players")
+local RS          = getServiceSafe("RunService")
+local UI          = getServiceSafe("UserInputService")
+local TS          = getServiceSafe("TweenService")
+local HttpService = getServiceSafe("HttpService")
+local WS          = getServiceSafe("Workspace")
+local CG          = getServiceSafe("CoreGui")
+
+if not Players or not RS or not UI or not WS then
+    warn("[OPSYX] Required Roblox services are unavailable; runtime not started.")
+    _G.__V94OPSYX_LD = nil
+    return
+end
 
 local ME = Players.LocalPlayer
 if not ME then ME = Players.PlayerAdded:Wait() end
@@ -541,6 +554,7 @@ local S = {
         sanitizeState=true,
         protectionInterval=1.0,
         protectionFaultLimit=3,
+        developerDiagnostics=false,
     },
     V40 = {
         targetPart="Head", priority="CROSSHAIR", sticky=true, stickyMargin=45,
@@ -746,7 +760,30 @@ end
 
 local PILLS = {}
 local CONNS = {}
-local function hook(c) if c then CONNS[#CONNS+1] = c end end
+local CONN_SET = setmetatable({}, {__mode="k"})
+local OWNED_INSTANCES = setmetatable({}, {__mode="k"})
+
+local function hook(c)
+    if not c then return nil end
+    local okConnected, connected = pcall(function() return c.Connected end)
+    if okConnected and connected == false then return c end
+    if CONN_SET[c] then return c end
+    CONN_SET[c] = true
+    CONNS[#CONNS + 1] = c
+    return c
+end
+
+local function trackOwnedInstance(obj)
+    if obj then OWNED_INSTANCES[obj] = true end
+    return obj
+end
+
+local function safeDestroyInstance(obj)
+    if not obj then return false end
+    OWNED_INSTANCES[obj] = nil
+    return pcall(function() obj:Destroy() end)
+end
+
 local GUI = {
     sg=nil, uiScale=nil, main=nil, titleLabel=nil, restoreBar=nil, restoreText=nil,
     igPanel=nil, igStatusLbl=nil, igSearch=nil, igSortBtn=nil,
@@ -917,6 +954,12 @@ local KEYBIND_ORDER = {
     "feature", "hide", "master", "panic", "advanced",
 }
 
+local DEFAULT_KEYBINDS = {
+    am="F1", es="F2", sl="F3", tr="F4",
+    hold="F5", feature="F6", hide="F7", master="F8",
+    panic="F9", advanced="F10",
+}
+
 local function sanitizeKeybindTable(source)
     local clean = {}
     local used = {}
@@ -926,7 +969,8 @@ local function sanitizeKeybindTable(source)
     -- executor builds where pairs() iteration order is not guaranteed.
     for i = 1, #KEYBIND_ORDER do
         local keyName = KEYBIND_ORDER[i]
-        local defaultValue = S.KB[keyName] or ""
+        local defaultValue = S.KB[keyName]
+        if defaultValue == nil then defaultValue = DEFAULT_KEYBINDS[keyName] or "" end
         local candidate = src[keyName]
         if type(candidate) ~= "string" then
             candidate = defaultValue
@@ -2376,6 +2420,11 @@ registerFeatureToggle("runtimePaused", function() return S.V40.runtimePaused end
     S.V40.runtimePaused = v
 end)
 
+registerFeatureToggle("developerDiagnostics", function() return S.V39.developerDiagnostics == true end, function(v)
+    S.V39.developerDiagnostics = v == true
+    ST.__expertSetDebug(v == true)
+end)
+
 local LAYOUT_CACHE = {
     vw = 0, vh = 0, scale = 0,
     mainVisible = nil, ignoreVisible = nil, settingsVisible = nil,
@@ -3633,6 +3682,7 @@ local function cg()
     C.GUI.sg = screenGui
     if not ST.ourGuis then ST.ourGuis = {} end
     table.insert(ST.ourGuis, screenGui)
+    trackOwnedInstance(screenGui)
 
     local scaleContainer = Instance.new("Frame")
     scaleContainer.Name = "OPSYXScaleRoot"
@@ -4542,7 +4592,8 @@ local function cg()
                    fpsHigh=C.S.V39.fpsHigh, layoutLocked=C.S.V39.layoutLocked, snapPanels=C.S.V39.snapPanels,
                    profileAutoBackup=C.S.V39.profileAutoBackup, profileAutoMigration=C.S.V39.profileAutoMigration,
                    protection=C.S.V39.protection, detectIntegrity=C.S.V39.detectIntegrity, sanitizeState=C.S.V39.sanitizeState,
-                   protectionInterval=C.S.V39.protectionInterval, protectionFaultLimit=C.S.V39.protectionFaultLimit},
+                   protectionInterval=C.S.V39.protectionInterval, protectionFaultLimit=C.S.V39.protectionFaultLimit,
+                   developerDiagnostics=C.S.V39.developerDiagnostics},
             uiScale = (C.GUI.uiScale and C.GUI.uiScale.Scale) or 1,
             adaptive = FC_ADAPTIVE,
             uiPositions = ST.uiPositions,
@@ -4697,6 +4748,8 @@ local function cg()
             ok, why = numRange(d.V39, "protectionInterval", 0.5, 5, "Invalid protection interval")
             if not ok then return false, why end
             ok, why = numRange(d.V39, "protectionFaultLimit", 1, 10, "Invalid protection fault limit")
+            if not ok then return false, why end
+            ok, why = boolField(d.V39, "developerDiagnostics", "Invalid developer diagnostics flag")
             if not ok then return false, why end
         end
         if d.uiScale ~= nil then
@@ -5067,6 +5120,7 @@ local function cg()
                 if C.S.V39[k] ~= nil and type(v) == type(C.S.V39[k]) then C.S.V39[k]=v end
             end
         end
+        ST.__expertSetDebug(C.S.V39.developerDiagnostics == true)
         local profileSafeMode = C.S.V39.safeMode == true
         ST.v39.safeMode = false
         if profileSafeMode then
@@ -5650,6 +5704,7 @@ if MOB then
 
         if not ST.ourGuis then ST.ourGuis = {} end
         table.insert(ST.ourGuis, tg)
+        trackOwnedInstance(tg)
 
         local mPanel = Instance.new("Frame")
         mPanel.Name = rs(10)
@@ -6273,6 +6328,132 @@ ST.OPSYX_SURFACE = {
     repeatedFaults=0, lastFault="", lastFaultT=0
 }
 
+-- ============================================================
+-- EXPERT PROTECTION / STABILITY LAYER
+-- Defensive only: protects OPSYX-owned runtime state and lifecycle.
+-- ============================================================
+ST.EXPERT_PROTECT = {
+    enabled=true, debug=false, cleanupStarted=false,
+    featureFaultWindow=10, featureFaultLimit=3, features={}, connections={},
+    lastDiagnosticT=0, lastDiagnostic="",
+}
+
+local function expertNow() return os.clock() end
+
+local function expertLog(category, message)
+    local ep = ST.EXPERT_PROTECT
+    local msg = tostring(message or "")
+    ep.lastDiagnostic, ep.lastDiagnosticT = msg, expertNow()
+    if S.V39.developerDiagnostics == true then v39Log(category or "EXPERT", msg) end
+    if ep.debug then warn("[OPSYX][EXPERT] " .. msg) end
+end
+
+function ST.__expertSetDebug(enabled)
+    ST.EXPERT_PROTECT.debug = enabled == true
+    if ST.EXPERT_PROTECT.debug then expertLog("EXPERT", "Developer diagnostics enabled") end
+    return ST.EXPERT_PROTECT.debug
+end
+
+function ST.__expertConnect(tag, signal, callback)
+    local ep = ST.EXPERT_PROTECT
+    if not ep.enabled then return nil end
+    local key = tostring(tag or "connection")
+    local old = ep.connections[key]
+    if old then pcall(function() if old.Connected then old:Disconnect() end end) end
+    ep.connections[key] = nil
+    if not signal or type(signal.Connect) ~= "function" then
+        expertLog("DEPENDENCY", "Signal unavailable: " .. key)
+        return nil
+    end
+    local ok, conn = pcall(function() return signal:Connect(callback) end)
+    if not ok or not conn then
+        expertLog("CONNECTION", key .. " connect failed: " .. tostring(conn))
+        return nil
+    end
+    ep.connections[key] = conn
+    hook(conn)
+    return conn
+end
+
+function ST.__expertDisconnect(tag)
+    local key = tostring(tag or "connection")
+    local ep = ST.EXPERT_PROTECT
+    local conn = ep.connections[key]
+    ep.connections[key] = nil
+    if conn then pcall(function() conn:Disconnect() end) end
+end
+
+function ST.__expertFeatureCall(featureName, callback, toggleName)
+    local ep = ST.EXPERT_PROTECT
+    if not ep.enabled then return pcall(callback) end
+    local name = tostring(featureName or "FEATURE")
+    local rec = ep.features[name] or {faults=0, windowT=0, total=0, disabled=false, lastError="", lastErrorT=0}
+    ep.features[name] = rec
+    local ok, err = pcall(callback)
+    if ok then
+        if rec.faults > 0 and expertNow() - rec.windowT > ep.featureFaultWindow then rec.faults, rec.windowT = 0, 0 end
+        return true
+    end
+    local now = expertNow()
+    if rec.windowT == 0 or now - rec.windowT > ep.featureFaultWindow then rec.windowT, rec.faults = now, 0 end
+    rec.faults, rec.total, rec.lastError, rec.lastErrorT = rec.faults + 1, rec.total + 1, tostring(err), now
+    ST.v39.lastError, ST.v39.lastErrorT = rec.lastError, now
+    ST.fcStats.errors = (ST.fcStats.errors or 0) + 1
+    v39SetHealth(name, "DEGRADED", rec.lastError)
+    expertLog("FEATURE_ERROR", name .. ": " .. rec.lastError)
+    if rec.faults >= ep.featureFaultLimit and not rec.disabled then
+        rec.disabled = true
+        if toggleName and type(setFeatureToggle) == "function" then pcall(setFeatureToggle, toggleName, false) end
+        if name == "AIMBOT" then
+            aiming=false; ST.arm=false; ST.htArm=false; ST.saArm=false; pcall(flushTarget)
+        elseif name == "TRIGGER" then
+            ST.tbPending=false; ST.tbPendingAt=0; ST.mobArm=false
+        elseif name == "ESP" then
+            pcall(destroyAllInstanceESP)
+        elseif name == "SILENT" then
+            ST.saArm=false
+        elseif name == "FOV" then
+            pcall(function() if FC then FC.Visible=false end end)
+        end
+        v39SetHealth(name, "SAFE", "Auto-disabled after repeated runtime errors")
+        v39Recovery("EXPERT_AUTO_DISABLE:" .. name)
+        expertLog("RECOVERY", name .. " auto-disabled after repeated errors")
+    end
+    return false, err
+end
+
+function ST.__expertValidateRuntime()
+    if not ST.EXPERT_PROTECT.enabled then return true end
+    local ok = pcall(ST.__opsyxProtectionClamp)
+    if not ok then ST.__opsyxProtectionFault("CONFIG_SANITIZE_FAILED", true); return false end
+    if type(S.KB) ~= "table" then ST.__opsyxProtectionFault("KEYBIND_STATE_MISSING", true); return false end
+    local clean = sanitizeKeybindTable(S.KB)
+    local changed = false
+    for i=1,#KEYBIND_ORDER do local k=KEYBIND_ORDER[i]; if S.KB[k] ~= clean[k] then changed=true; break end end
+    if changed then
+        S.KB = clean
+        ST.v39.profileDirty = true; ST.v39.profileDirtyReason = "Keybind state sanitized"
+        expertLog("CONFIG", "Malformed/duplicate keybinds sanitized")
+    end
+    return true
+end
+
+function ST.__expertDiagnosticsSnapshot()
+    local ep = ST.EXPERT_PROTECT
+    local parts = {}
+    local names = {"AIMBOT","ESP","SILENT","TRIGGER","FOV","INPUT","UI","CONFIG","CLEANUP","WATCHDOG"}
+    for i=1,#names do
+        local n=names[i]; local rec=ep.features[n]; local hs=FEATURE_HEALTH[n]
+        local state=type(hs)=="table" and hs.state or tostring(hs or "UNKNOWN")
+        parts[#parts+1] = n .. ":" .. state .. (rec and rec.faults>0 and "("..tostring(rec.faults)..")" or "")
+    end
+    local connN=0; for _,c in pairs(ep.connections) do if c then connN=connN+1 end end
+    local instN=0; for obj in pairs(OWNED_INSTANCES) do if obj then instN=instN+1 end end
+    return string.format("EXPERT %s | DEBUG %s\n%s\nCONNS %d | INSTANCES %d | RECOVERIES %d | CHECKS %d\nLAST ERROR: %s\nLAST DIAG: %s",
+        ep.enabled and "ON" or "OFF", ep.debug and "ON" or "OFF", table.concat(parts," | "), connN, instN,
+        ST.fcStats.recoveries or 0, ST.v39.protectChecks or 0, tostring(ST.v39.lastError or "NONE"):sub(1,100), tostring(ep.lastDiagnostic or "NONE"):sub(1,100))
+end
+
 function ST.__opsyxProtectionPublish()
     ST.v39.protectLastMs = tonumber(ST.OPSYX_SURFACE.lastMs) or 0
     ST.v39.protectSlow = tonumber(ST.OPSYX_SURFACE.slowPasses) or 0
@@ -6499,6 +6680,11 @@ function ST.__opsyxProtectionClamp()
         S.V40.performance = perf
     end
 
+    if type(S.V39.developerDiagnostics) ~= "boolean" then
+        S.V39.developerDiagnostics = false
+        repaired = true
+    end
+
     if not repaired then return false end
     ST.OPSYX_PROTECT.repairs = ST.OPSYX_PROTECT.repairs + 1
     ST.OPSYX_PROTECT.last = "STATE_SANITIZED"
@@ -6549,7 +6735,7 @@ function ST.__opsyxProtectionIntegrityTick()
     end
 
     if S.V39.sanitizeState ~= false then
-        ST.__opsyxProtectionClamp()
+        ST.__expertValidateRuntime()
     end
 
     -- Repair a detached OPSYX UI root before escalating to a protection fault.
@@ -6724,7 +6910,7 @@ ST.v39.layoutUiT = 0
 ST.v39.espLabelT = 0
 
 ST.v39.okLoop, ST.v39.errLoop = pcall(function()
-    ST.v39.loopConn = RS.RenderStepped:Connect(function(dt)
+    ST.v39.loopConn = ST.__expertConnect("MAIN_LOOP", RS.RenderStepped, function(dt)
         local __guardOk, __guardErr = pcall(function()
         if not ST.ld then
             if ST.v39.loopConn then ST.v39.loopConn:Disconnect() end
@@ -6847,7 +7033,7 @@ ST.v39.okLoop, ST.v39.errLoop = pcall(function()
                 FC.Transparency = S.FV.tr
             end
             if FC.Visible ~= show then FC.Visible = show end
-        end)
+        end, "fov")
 
         pcall(function()
             if not FTL then return end
@@ -7405,9 +7591,17 @@ ST.v39.okLoop, ST.v39.errLoop = pcall(function()
             pcall(ST.v40FrameTick, nowFrame)
         end
 
-        if S.AM.on or holdToAimEnabled or ST.holdReleased then pcall(doAimbot, dt) end
-        if S.SL.on and ST.saArm then pcall(sa, dt) end
-        if S.TR.on and (ST.arm or ST.mobArm) then pcall(tb) end
+        if not S.V40.runtimePaused then
+            if S.AM.on or holdToAimEnabled or ST.holdReleased then
+                ST.__expertFeatureCall("AIMBOT", function() doAimbot(dt) end, "aim")
+            end
+            if S.SL.on and ST.saArm then
+                ST.__expertFeatureCall("SILENT", function() sa(dt) end, "silent")
+            end
+            if S.TR.on and (ST.arm or ST.mobArm) then
+                ST.__expertFeatureCall("TRIGGER", function() tb() end, "trigger")
+            end
+        end
 
         -- [PERF-9.45.3] Frame-time feedback adds a fast overload signal.
         -- It only influences optional ESP cadence; user configuration stays intact.
@@ -7518,6 +7712,14 @@ ST.oca = function(plr)
     end)
 end
 
+-- Initialize the event helper before any initial player pass can call ST.oca.
+local EVENTS_OK, EVENTS_ERR = pcall(ST.setupEvents)
+if not EVENTS_OK then
+    v39SetHealth("INPUT", "DEGRADED", tostring(EVENTS_ERR))
+    ST.v39.lastError = tostring(EVENTS_ERR)
+    v39Log("ERROR", "EVENT_SETUP: " .. tostring(EVENTS_ERR))
+end
+
 hook(ME.CharacterAdded:Connect(function()
     -- [PERF-3] Wall Check invariant re-enforced here (replaces per-frame call).
     forceWallCheck()
@@ -7622,7 +7824,6 @@ hook(Players.PlayerRemoving:Connect(function(pl)
     end
 end))
 end
-ST.setupEvents()
 
 -- ============================================================
 -- V9.41.1 ADVANCED SUITE
@@ -9194,7 +9395,7 @@ ST.setupV40 = function()
             if STATE.crosshair then active[#active+1] = "CROSSHAIR" end
             if #active == 0 then active[1] = "NONE" end
             ADV.diagnostics.Text = string.format(
-                "UI STATUS: %s\nFEATURE STATUS: AIM %s • ESP %s • CROSSHAIR %s\nACTIVE FEATURES: %s\nMANAGED CONNECTIONS: %d\nCONFIG STATUS: S.AM / S.ES / S.V40 VALIDATED\nLAST ERROR: %s\nLAST UPDATE: %s\nCLEANUP STATUS: %s",
+                "UI STATUS: %s\nFEATURE STATUS: AIM %s • ESP %s • CROSSHAIR %s\nACTIVE FEATURES: %s\nMANAGED CONNECTIONS: %d\nCONFIG STATUS: S.AM / S.ES / S.V40 VALIDATED\nLAST ERROR: %s\nLAST UPDATE: %s\nCLEANUP STATUS: %s\nEXPERT: %s",
                 (suite.Parent and scroll.Parent == suite and content.Parent == scroll) and "OK" or "WARNING",
                 S.AM.on and "ON" or "OFF",
                 S.ES.on and "ON" or "OFF",
@@ -9203,11 +9404,14 @@ ST.setupV40 = function()
                 #ADV_CONNS,
                 tostring(d.lastError or "NONE"):sub(1, 80),
                 os.date("%H:%M:%S"),
-                tostring(d.cleanupState or "IDLE")
+                tostring(d.cleanupState or "IDLE"),
+                ST.__expertDiagnosticsSnapshot()
             )
             ADV.diagLastUpdate = os.clock()
             notify("Diagnostics complete")
         end, {order=20})
+
+        makeAdvButton(diagCard, "diag_developer", "DEVELOPER DIAGNOSTICS", nil, {order=25, boolKey="developerDiagnostics", toggleName="developerDiagnostics"})
 
         makeAdvButton(diagCard, "diag_repair", "REPAIR UI STATE", function()
             if suite.Parent == nil then
@@ -10116,7 +10320,12 @@ ST.setupV40 = function()
         if GUI.advancedSuite then pcall(function() GUI.advancedSuite:Destroy() end); GUI.advancedSuite=nil end
     end
 end
-ST.setupV40()
+local V40_INIT_OK, V40_INIT_ERR = pcall(ST.setupV40)
+if not V40_INIT_OK then
+    v39SetHealth("UI", "DEGRADED", tostring(V40_INIT_ERR))
+    ST.v39.lastError = tostring(V40_INIT_ERR)
+    v39Log("ERROR", "ADVANCED_SUITE_INIT: " .. tostring(V40_INIT_ERR))
+end
 
 -- ============================================================
 -- RESIZE HANDLES: stable all-box resizing
@@ -10172,9 +10381,10 @@ end)
 -- CLEANUP
 -- ============================================================
 function _G.__V94OPSYX_CL()
-    -- [3X-PROTECT-CLEANUP] Cleanup is single-flight. Re-entrant unload calls
-    -- from watchdog/UI/old instances must never race the same connection tables.
+    -- [EXPERT-CLEANUP] Single-flight shutdown guard.
+    if ST.EXPERT_PROTECT and ST.EXPERT_PROTECT.cleanupStarted then return end
     if ST.v39.cleanupState == "RUNNING" then return end
+    if ST.EXPERT_PROTECT then ST.EXPERT_PROTECT.cleanupStarted = true end
     if ST.v39.cleanupState == "COMPLETE" and not ST.ld then return end
     ST.v39.cleanupState = "RUNNING"
     v39Log("CLEANUP", "begin")
@@ -10214,6 +10424,12 @@ function _G.__V94OPSYX_CL()
     for i = 1, #connsSnapshot do
         pcall(function() connsSnapshot[i]:Disconnect() end)
     end
+    for connKey, conn in pairs(ST.EXPERT_PROTECT and ST.EXPERT_PROTECT.connections or {}) do
+        pcall(function() if conn and conn.Connected then conn:Disconnect() end end)
+        if ST.EXPERT_PROTECT then ST.EXPERT_PROTECT.connections[connKey] = nil end
+    end
+    for conn in pairs(CONN_SET) do CONN_SET[conn] = nil end
+    for obj in pairs(OWNED_INSTANCES) do safeDestroyInstance(obj) end
     -- [COMPAT-5] Two-pass CHAR_CONNS cleanup: snapshot keys first, then
     -- disconnect and nil. Avoids pairs()-mutation instability on Madium V2
     -- and Fluxus executor Luau forks.
@@ -10262,6 +10478,11 @@ function _G.__V94OPSYX_CL()
     clearPartCache(); flushTarget()
     for i = 1, #PLAYER_LIST do PLAYER_INDEX[PLAYER_LIST[i]] = nil end
     PLAYER_LIST = {}
+    if ST.EXPERT_PROTECT then
+        ST.EXPERT_PROTECT.features = {}
+        ST.EXPERT_PROTECT.lastDiagnostic = "cleanup complete"
+    end
+    ST.ourGuis = nil
     ST.v39.cleanupState = "COMPLETE"
     v39Log("CLEANUP", "complete")
     _G.__V94OPSYX_LD = nil; _G.__V94OPSYX_CL = nil
@@ -10325,6 +10546,8 @@ print("  [FIX-DIAG]  tick() removed from RNG seed path")
 print("  [3X-PROTECT] Frame exception containment + 3-fault safe-state tripwire")
 print("  [3X-PROTECT] Async trigger pending watchdog + target post-validation")
 print("  [3X-PROTECT] Single-flight cleanup / unload protection")
+print("  [EXPERT-PROTECT] Connection dedupe + owned-instance tracking + feature circuit breakers")
+print("  [EXPERT-PROTECT] Runtime config sanitization + optional developer diagnostics")
 print("  No webhook. No data collection. No outbound networking.")
 print("  Default keys: F1 Aim | F2 ESP | F3 Silent | F4 Trigger | Wall Check=Always ON")
 print("  Default globals: F5 Hold | F6 Center | F7 Hide | F8 Master | F9 Panic | F10 Advanced | RMB=Arm")
