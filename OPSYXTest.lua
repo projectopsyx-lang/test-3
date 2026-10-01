@@ -1,229 +1,5 @@
---  SUITE V9.45.3-DEFENSIVE-STABLE - OPSYX  (FULL AUDIT / UI SAFE / VERTICAL ADVANCED SUITE) v1
---  V9.45.3: defensive compatibility pass; safe-mode state preservation, input disarm, adaptive load control, and AC false-positive suppression.
---  All V9.44.0 features retained. See changelog at bottom.
---
---  [NEW-9.45-1]  ANTI-CHEAT DETECTION MODULE (S.AC.acDetect): passive game-side
---                anti-cheat heuristics. Monitors for unusual RemoteEvent firing
---                rate spikes (flag storms), unexpected Touched/Hit callbacks on
---                invisible kill-parts near the local character, and abnormal
---                CFrame/Velocity writes that suggest server-authoritative bans.
---                Detected events are logged to RUNTIME_LOG and displayed in the
---                dashboard. S.AC.acDetectInterval controls the poll rate (default 3s).
---  [NEW-9.45-2]  AC EVENT COUNTER + NOTIFY: ST.acEvents accumulates detection
---                hits across the session. When the count crosses S.AC.acThreshold
---                (default 5), the status dot turns red and notify() fires once.
---  [FIX-9.45-A]  spectatorCheck: previous implementation counted characterless
---                players unconditionally, flagging bots and waiting-to-spawn players
---                as spectators. Now only counts players whose character is nil for
---                longer than 8 seconds (ST._charNilSince tracks per-player onset).
---  [FIX-9.45-B]  espCharacterState Health<=0 eviction path missed the HUM_CACHE
---                write after a nil-eviction; a fresh FindFirstChildOfClass would
---                immediately re-populate HUM_CACHE with the dead humanoid, silently
---                undoing [FIX-9.44-G]. The fresh hum is now checked before caching.
---  [FIX-9.45-C]  importClipboard (Advanced Suite) applied AM.md with a 5000-stud
---                ceiling instead of the script-wide ESP_MAX_RANGE (1000), allowing
---                a crafted config paste to bypass the range cap. Corrected to
---                cl(tonumber(data.AM.md), 100, ESP_MAX_RANGE).
---
---  [FIX-9.44-A]  NEAREST_VISIBLE mode was identical to DISTANCE; now uses
---                world-space distance after a mandatory LOS check (visibility
---                actually matters in this mode).
---  [FIX-9.44-B]  triggerbot sc() used tw() (task.wait) with a fixed 0.015s
---                sleep inside a pcall-guarded tsp (task.spawn). On executors
---                where tw is the legacy wait() the 0.015s cannot be honoured;
---                replaced with the task.delay path so delay precision is
---                preserved on all executor builds.
---  [FIX-9.44-C]  copyConfig / exportFile / importClipboard serialised only
---                one side of the config (V40 STATE or S.*) but not both
---                consistently, causing round-trip drift on profile reload.
---                Import now validates every numeric range with cl() to prevent
---                malformed JSON from corrupting runtime state.
---  [FIX-9.44-D]  FOV slider upper limit was hard-coded to 500 in the drag
---                handler but S.FV.r had no upper-bound guard; aimbots could
---                call findTarget with fovLimit=500 even when the displayed FOV
---                was lower. Both ends now share ESP_MAX_RANGE as a ceiling and
---                the slider clamp is applied at read-time.
---  [FIX-9.44-E]  purgeStalePredCache was never called; LP table grew without
---                bound on long sessions. Now wired into the existing LOSC sweep.
---  [FIX-9.44-F]  Dashboard auto-update (RenderStepped) formatted FPS_SHOWN and
---                #PLAYER_LIST from upvalues captured at construction time rather
---                than reading the live values each frame. Fixed to reference the
---                live globals.
---  [FIX-9.44-G]  espCharacterState() returned stale valid=true when the
---                humanoid's Health was 0 but HUM_CACHE still held the dead
---                humanoid. Force-evict cache entry on Health <= 0.
---  [FIX-9.44-H]  White-team symmetry: when BOTH players are on team White the
---                old code set enemy=true (both players on no team treated as
---                enemies of each other). A new S.AM.whiteAsEnemy toggle
---                (default true) preserves the old fail-closed behavior while
---                allowing users to flip it for FFA servers.
---  [FIX-9.44-I]  refreshIgnorePanel sorted by dist when igSortNear=true but
---                math.huge entries (offline/no-character players) sorted before
---                real nearby players due to table.sort instability. Now pushes
---                math.huge to the end explicitly.
---  [FIX-9.44-J]  makeDraggable preserved AnchorPoint=(0,0) after first drag but
---                layoutRightDock() resets AnchorPoint to (1,0) on each layout
---                pass, fighting the dragged position. layoutRightDock now skips
---                anchor reset for dragged panels.
---
---  [NEW-9.44-1]  AIM ASSIST STRENGTH slider (0.0-1.0) exposed in Advanced Suite
---                Aimbot card. Scales the smoothing curve's output amplitude
---                independently of S.AM.sm so users can tune "pull strength"
---                without changing the feel of the smooth curve.
---  [NEW-9.44-2]  TARGET HISTORY: last 5 locked targets stored in ST.targetHistory
---                (name + time). Shown in dashboard and Advanced Suite diagnostics.
---  [NEW-9.44-3]  ESP CHAMS (color-fill Highlights): when S.ES.highlight and
---                S.ES.chamsFill=true the Highlight FillColor is set instead of
---                left transparent, giving a solid-color "chams" appearance
---                through walls when depthCheck is off.
---  [NEW-9.44-4]  KILL STREAK COUNTER: ST.kills is now tracked and displayed in
---                the dashboard when S.AC.ks (kill streak display) is enabled.
---                Resets on death/respawn. Kill is detected by target HP reaching 0.
---  [NEW-9.44-5]  QUICK-BIND panel: pressing any pill button for > 0.6s opens
---                a mini rebind dialog for that feature's hotkey without opening
---                the full settings panel.
---  [NEW-9.44-6]  SPECTATOR DETECTION: detects when another player is spectating
---                the local player via a character camera check and warns via
---                notify() / status dot color change. Configurable interval.
---  [NEW-9.44-7]  SMART JITTER: when S.AC.jitter=true and aimbot is firing,
---                adds a randomised sub-pixel walk to the aim output that mimics
---                natural micro-corrections without affecting average accuracy.
---
 -- ============================================================
-
--- ============================================================
---  All fixes from V9.31 through V9.38 are fully retained.
---  V9.37-LOWEND adds low-end CPU/memory optimizations on top of V9.36-COMPAT.
---
---  ============================================================
---  V9.37.1-FIXED (applied by HackerAI code review):
---  [FIX-9.37.1-A] ESP hot path team check was fail-OPEN:
---    `local enemy = S.ES.tc and espTeamEnemyPass(pl) or true`
---    evaluates to `true` whenever espTeamEnemyPass() returns false,
---    so teammates were never invalidated (and were even colored as
---    enemies). Now: `local enemy = true; if S.ES.tc then enemy =
---    espTeamEnemyPass(pl) end` -- the claimed fail-closed behavior
---    actually works.
---  [FIX-9.37.1-B] InputBegan: `if gpd then return end` moved directly
---    after the key-rebind (ST._rb) block so F5/F7/Ctrl+F8 and the
---    F1-F4 feature hotkeys no longer fire on game-processed input.
---    Order is now: rebind -> gpd -> RMB/LMB arming -> F7 -> Ctrl+F8
---    -> F5 -> F1-F4 hotkeys.
---  [FIX-9.37.1-C] refreshIgnorePanel 50 ms force-debounce now DEFERS a
---    trailing rebuild instead of dropping the final call, so the last
---    keystroke/scroll click always renders.
---  [FIX-9.37.1-D] Drag release is now detected by a global
---    UI.InputEnded hook keyed on the ACTIVE_DRAG input object.
---    Per-drag InputObject.Changed release detection removed (pooled
---    InputObjects do not reliably fire Changed; drags could stick).
---  [FIX-9.37.1-E] HUM_CACHE entries are identity-checked
---    (h.Parent == c) in al() and espCharacterState() so a replaced
---    Humanoid inside the same character model cannot poison the cache.
---  [FIX-9.37.1-F] Local `rs` UIStroke shadow in makeToggle renamed to
---    `stroke` (removes shadowing of the rs() name generator).
---  [FIX-9.37.1-G] Restore-bar docked offset clamped; setfpscap(0)
---    normalized to 9999 to match the fps_unlock branch below it.
---  ============================================================
---
---  V9.36-COMPAT additional cross-executor hardening:
---  [COMPAT-1]  math.pow() -> ^ operator to avoid an unnecessary library call;
---              the native Luau exponent operator is used for these hot paths.
---  [COMPAT-2]  clearLOSCForChar(): two-pass pairs-safe deletion
---              (Madium V2 and Fluxus pairs() instability on current-key nil)
---  [COMPAT-3]  los(): RAY_FILTER[1] falls back to WS when ME.Character==nil
---              (all executors during respawn; stricter on Madium V2/SynX)
---  [COMPAT-4]  isEnemy(): TeamColor reads pcall-guarded (Madium V2, SynX,
---              Script-Ware anti-cheat property hook protection)
---  [COMPAT-5]  _G.__V94OPSYX_CL(): CHAR_CONNS/LP/CHARS two-pass cleanup
---              (Madium V2, Fluxus pairs() safety)
---  [COMPAT-6]  WaitForChild("PlayerGui") given 10s timeout in cg() and
---              mobile UI block (Madium V2 early injection, Krnl, Fluxus)
---  [COMPAT-7]  UI:GetFocusedTextBox() pcall-guarded in InputBegan handler
---              (Synapse X legacy, Krnl older builds, Fluxus)
---  [COMPAT-8]  GetAttribute() pcall-guarded in scroll button handlers
---              (Synapse X legacy targets, Krnl older builds)
---  [COMPAT-9]  RNG seed computation overflow-safe for 32-bit Luau builds
---              (Krnl 32-bit, Fluxus 32-bit, older Madium V2)
---  [COMPAT-10] Drawing probe calls removed; type() guard is sufficient
---              (Madium V2 lazy Drawing init, Fluxus)
---  [COMPAT-11] Dead code flushAimCache() removed
---  [COMPAT-12] SetAttribute() calls pcall-guarded in refreshIgnorePanel
---              (same older-client guard as GetAttribute)
---  [FIX-UI-DRAG] Main / Ignore List / Settings / Mobile panels now support
---              mouse + touch dragging with viewport clamping; responsive
---              layout no longer snaps a manually moved panel back.
---  [FIX-HOLD-AIM-IMMEDIATE] RMB hold latches `aiming = true` directly in
---              InputBegan and clears it in InputEnded, removing RenderStepped activation delay.
---  No webhook. No data collection. No outbound networking.
---  [PERF-1] Responsive layout is state/viewport-gated instead of rewriting
---           panel positions every RenderStepped on stable frames.
---  [PERF-2] FOV slider consumes InputObject positions instead of polling the
---           global mouse position every RenderStepped while dragging.
---  [COMPAT-13] RaycastParams prefers ExcludeInstances with legacy fallback.
---  [COMPAT-14] Mouse-helper capability now respects UI.MouseEnabled.
---  [COMPAT-15] Raycast ExcludeInstances support is detected by a guarded write,
---             preventing false-positive capability detection on older clients.
---
---  V9.37-LOWEND optimizations (low-end PC / low-power CPU focus):
---  [PERF-3] forceWallCheck() removed from per-frame RenderStepped; moved to
---           startup and ME.CharacterAdded. Was a no-op write every frame.
---  [PERF-4] fr() (root-part finder) now uses PART_CACHE_ROOT as primary
---           lookup, eliminating repeated FindFirstChild iterations in hot paths.
---  [PERF-5] HUM_CACHE added: al() and ESP Humanoid lookups now cached per
---           character, replacing FindFirstChildOfClass on every scan frame.
---           Cache invalidated on character change, respawn, and removal.
---  [PERF-6] FC.NumSides write removed from per-tick FOV update (was
---           unconditionally writing 64 every tick; set once at init instead).
---           HP color recomputed only when HP ratio changes (1% granularity),
---           eliminating per-tick Color3 allocations when HP is stable.
---  [PERF-7] All panel/slider UI.InputChanged connections consolidated into
---           one shared handler (ACTIVE_DRAG). Previously 5 separate listeners
---           all fired on every mouse-move event. Single dispatcher cuts that
---           to one nil-check per mouse-move when no drag is active.
---  [PERF-8] refreshIgnorePanel force-rebuilds debounced at 50 ms minimum.
---           Prevents burst Instance alloc/destroy on rapid typing or scrolling.
---  [PERF-9] LOSC (wall-check result cache) periodic stale-entry sweep added.
---  [PERF-10] Root/head cache paths no longer return generic fallback parts when
---            a real root/head exists; reduces repeated hierarchy searches.
---  [FIX-ASYNC] Delayed callbacks carry a lifecycle token and self-cancel after unload.
---           Entries older than 5s pruned every 10s to bound table growth on
---           long sessions / high-player servers.
---  [FIX-ESP-FILTER] ESP now enforces validity -> ignore -> team before any
---           character/humanoid/root, distance, projection, or render work.
---           Filtered players are removed immediately and cannot be recreated
---           until they qualify again.
---  [FIX-ESP-LIVE] Ignore-list changes, player Team/TeamColor changes, and
---           LocalPlayer team changes immediately reconcile the ESP set.
---  [FIX-ESP-RESPAWN] Respawn/player removal invalidates stale ESP and cache
---           state so filtered players cannot resurrect old overlays.
---  [FIX-ESP-CHAR-REMOVE] CharacterRemoving closes the death/respawn stale-ESP gap.
---  [FIX-ESP-TEAM-FAILCLOSED] ESP team-check fails closed on protected TeamColor reads.
---  [PERF-ESP-TEAMCACHE] ESP team relationships are cached and invalidated only
---           on Team/TeamColor changes or player removal, eliminating repeated
---           protected TeamColor reads from the periodic ESP hot path.
---  [FIX-ESP-OWNERSHIP] ESP objects are generation/character-owned; stale or
---           reparented overlays are rejected and rebuilt instead of reused.
---  [HARDEN-ESP-INTEGRITY] ESP update path fails closed on ownership/team drift.
---  [PERF-11] Player list is event-synchronized; hot paths no longer allocate
---           a fresh Players:GetPlayers() array for scans/ESP/diagnostics.
---  [PERF-12] Targeting team relations are cached and invalidated on team changes.
---  [PERF-13] Prediction cache objects are updated in place to reduce GC churn.
---  [PERF-14] FOV slider updates directly from InputChanged; no RenderStepped poll.
---  [HARDEN-ESP-ROOT] ESP creation now receives the validated root/humanoid
---                 instead of relying on an undeclared root reference.
---  [FIX-ESP-VISIBILITY] VISIBILITY now clears Drawing extras as well as labels.
---  [ADV-ESP] Smart culling, nearest-player cap, distance fade, graphical
---           health bars, and Highlight depth mode are available as opt-in
---           visual/performance mechanics.
---  [PROTECT-UI-REPAIR] Detached OPSYX ScreenGui is repaired before escalation.
---  [FIX-HOLD-RELEASE-GUARD] stale mouse state cannot re-arm after RMB release.
---  [FIX-HOLD-TOGGLE] enabling hold-aim disables free-running normal aimbot.
---  [FIX-TRIGGER-QUEUE] delayed trigger actions are single-flight, exception-safe,
---           and lifecycle-safe.
--- ============================================================
-
--- ============================================================
--- RE-EXECUTION GUARD
+-- RE-EXECUTION GUARD 12
 -- If OPSYX is already running, unload the previous instance first
 -- so the new execution starts cleanly without duplicate UI/connections.
 -- ============================================================
@@ -260,6 +36,26 @@ local function CAM()
 end
 
 local MOB = UI.TouchEnabled
+
+-- [UI-COMPAT-COREGUI] Prefer PlayerGui for OPSYX-owned ScreenGuis.
+-- Roblox owns the CoreGui localization/Developer Console surface, so keeping
+-- custom OPSYX UI in PlayerGui avoids unnecessary interaction with CoreGui
+-- while retaining CoreGui as a guarded compatibility fallback for clients
+-- where PlayerGui parenting is unavailable.
+local function resolveOPSYXGuiParent()
+    local pg = nil
+    pcall(function()
+        pg = ME:FindFirstChildOfClass("PlayerGui")
+        if not pg then
+            pg = ME:WaitForChild("PlayerGui", 10)
+        end
+    end)
+    if pg then return pg end
+
+    local core = nil
+    pcall(function() core = CG end)
+    return core
+end
 
 -- Static diagnostic pattern tables: allocated once, reused by the passive
 -- OPSYX diagnostics sweep.
@@ -4644,33 +4440,18 @@ local function cg()
     -- This changes only the GUI layer order; it does not create a full-screen overlay.
     screenGui.IgnoreGuiInset = true
     screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
-    screenGui.DisplayOrder = 1000000
-    -- [COMPAT-6] 10-second timeout on WaitForChild to prevent indefinite
-    -- yield on early-injection executors (Madium V2, Krnl, Fluxus) where
-    -- PlayerGui may not yet be replicated when the script runs.
-    -- WaitForChild can time out and return nil without throwing.  In that
-    -- case pcall() still returns true, so the old code incorrectly skipped
-    -- the CoreGui fallback and left the ScreenGui parentless.
-    local guiParent = nil
-    -- CoreGui is preferred because it gives OPSYX a stable top-level layer
-    -- above normal game PlayerGui menus. PlayerGui remains the compatibility
-    -- fallback for environments that restrict CoreGui parenting.
-    local okCore = pcall(function()
-        screenGui.Parent = C.CG
-        guiParent = screenGui.Parent
-    end)
-
-    if not okCore or not guiParent then
-        local okPlayer = pcall(function()
-            guiParent = C.ME:WaitForChild("PlayerGui", 10)
+    screenGui.DisplayOrder = 1000
+    -- [UI-COMPAT-COREGUI] PlayerGui is the primary parent. CoreGui is used
+    -- only as a guarded fallback for executor/client environments that reject
+    -- PlayerGui parenting. This avoids touching Roblox's CoreGui localization
+    -- and Developer Console hierarchy during normal OPSYX startup.
+    local guiParent = resolveOPSYXGuiParent()
+    if guiParent then
+        local okParent = pcall(function()
+            screenGui.Parent = guiParent
         end)
-        if okPlayer and guiParent then
-            local okParent = pcall(function()
-                screenGui.Parent = guiParent
-            end)
-            if not okParent or screenGui.Parent ~= guiParent then
-                guiParent = nil
-            end
+        if not okParent or screenGui.Parent ~= guiParent then
+            guiParent = nil
         end
     end
 
@@ -6692,28 +6473,15 @@ if MOB then
         -- Match the desktop UI layer so mobile controls also stay above normal game UI.
         tg.IgnoreGuiInset = true
         tg.ZIndexBehavior = Enum.ZIndexBehavior.Global
-        tg.DisplayOrder = 1000000
-        -- [COMPAT-6] Same 10-second timeout as desktop GUI.
-        -- Same timeout/nil-return fix as the desktop GUI.
-        local guiParent = nil
-        -- Same top-layer strategy as the desktop GUI: CoreGui first, then
-        -- PlayerGui only when CoreGui parenting is unavailable.
-        local okCore = pcall(function()
-            tg.Parent = CG
-            guiParent = tg.Parent
-        end)
-
-        if not okCore or not guiParent then
-            local okPlayer = pcall(function()
-                guiParent = ME:WaitForChild("PlayerGui", 10)
+        tg.DisplayOrder = 1000
+        -- [UI-COMPAT-COREGUI] Use the same PlayerGui-first policy as desktop.
+        local guiParent = resolveOPSYXGuiParent()
+        if guiParent then
+            local okParent = pcall(function()
+                tg.Parent = guiParent
             end)
-            if okPlayer and guiParent then
-                local okParent = pcall(function()
-                    tg.Parent = guiParent
-                end)
-                if not okParent or tg.Parent ~= guiParent then
-                    guiParent = nil
-                end
+            if not okParent or tg.Parent ~= guiParent then
+                guiParent = nil
             end
         end
 
@@ -7686,20 +7454,15 @@ function ST.__opsyxProtectionIntegrityTick()
     end
 
     -- Repair a detached OPSYX UI root before escalating to a protection fault.
-    -- This is intentionally limited to OPSYX-owned GUI parenting.
+    -- This is intentionally limited to OPSYX-owned GUI parenting. PlayerGui is
+    -- preferred; CoreGui remains only the compatibility fallback.
     if GUI.sg and GUI.sg.Parent == nil then
         local repaired = false
-        local okRepair = pcall(function()
-            GUI.sg.Parent = CG
-            repaired = GUI.sg.Parent == CG
-        end)
-        if not repaired then
+        local guiParent = resolveOPSYXGuiParent()
+        if guiParent then
             pcall(function()
-                local pg = ME:FindFirstChild("PlayerGui")
-                if pg then
-                    GUI.sg.Parent = pg
-                    repaired = GUI.sg.Parent == pg
-                end
+                GUI.sg.Parent = guiParent
+                repaired = GUI.sg.Parent == guiParent
             end)
         end
         if repaired then
@@ -11312,7 +11075,7 @@ ST.__raiseOpsyxBox(GUI.restoreBar, 1500)
 pcall(function()
     if GUI.sg then
         GUI.sg.ZIndexBehavior = Enum.ZIndexBehavior.Global
-        GUI.sg.DisplayOrder = 1000000
+        GUI.sg.DisplayOrder = 1000
     end
 end)
 
