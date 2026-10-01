@@ -1,5 +1,229 @@
+--  SUITE V9.45.3-DEFENSIVE-STABLE - OPSYX  (FULL AUDIT / UI SAFE / VERTICAL ADVANCED SUITE) 1
+--  V9.45.3: defensive compatibility pass; safe-mode state preservation, input disarm, adaptive load control, and AC false-positive suppression.
+--  All V9.44.0 features retained. See changelog at bottom.
+--
+--  [NEW-9.45-1]  ANTI-CHEAT DETECTION MODULE (S.AC.acDetect): passive game-side
+--                anti-cheat heuristics. Monitors for unusual RemoteEvent firing
+--                rate spikes (flag storms), unexpected Touched/Hit callbacks on
+--                invisible kill-parts near the local character, and abnormal
+--                CFrame/Velocity writes that suggest server-authoritative bans.
+--                Detected events are logged to RUNTIME_LOG and displayed in the
+--                dashboard. S.AC.acDetectInterval controls the poll rate (default 3s).
+--  [NEW-9.45-2]  AC EVENT COUNTER + NOTIFY: ST.acEvents accumulates detection
+--                hits across the session. When the count crosses S.AC.acThreshold
+--                (default 5), the status dot turns red and notify() fires once.
+--  [FIX-9.45-A]  spectatorCheck: previous implementation counted characterless
+--                players unconditionally, flagging bots and waiting-to-spawn players
+--                as spectators. Now only counts players whose character is nil for
+--                longer than 8 seconds (ST._charNilSince tracks per-player onset).
+--  [FIX-9.45-B]  espCharacterState Health<=0 eviction path missed the HUM_CACHE
+--                write after a nil-eviction; a fresh FindFirstChildOfClass would
+--                immediately re-populate HUM_CACHE with the dead humanoid, silently
+--                undoing [FIX-9.44-G]. The fresh hum is now checked before caching.
+--  [FIX-9.45-C]  importClipboard (Advanced Suite) applied AM.md with a 5000-stud
+--                ceiling instead of the script-wide ESP_MAX_RANGE (1000), allowing
+--                a crafted config paste to bypass the range cap. Corrected to
+--                cl(tonumber(data.AM.md), 100, ESP_MAX_RANGE).
+--
+--  [FIX-9.44-A]  NEAREST_VISIBLE mode was identical to DISTANCE; now uses
+--                world-space distance after a mandatory LOS check (visibility
+--                actually matters in this mode).
+--  [FIX-9.44-B]  triggerbot sc() used tw() (task.wait) with a fixed 0.015s
+--                sleep inside a pcall-guarded tsp (task.spawn). On executors
+--                where tw is the legacy wait() the 0.015s cannot be honoured;
+--                replaced with the task.delay path so delay precision is
+--                preserved on all executor builds.
+--  [FIX-9.44-C]  copyConfig / exportFile / importClipboard serialised only
+--                one side of the config (V40 STATE or S.*) but not both
+--                consistently, causing round-trip drift on profile reload.
+--                Import now validates every numeric range with cl() to prevent
+--                malformed JSON from corrupting runtime state.
+--  [FIX-9.44-D]  FOV slider upper limit was hard-coded to 500 in the drag
+--                handler but S.FV.r had no upper-bound guard; aimbots could
+--                call findTarget with fovLimit=500 even when the displayed FOV
+--                was lower. Both ends now share ESP_MAX_RANGE as a ceiling and
+--                the slider clamp is applied at read-time.
+--  [FIX-9.44-E]  purgeStalePredCache was never called; LP table grew without
+--                bound on long sessions. Now wired into the existing LOSC sweep.
+--  [FIX-9.44-F]  Dashboard auto-update (RenderStepped) formatted FPS_SHOWN and
+--                #PLAYER_LIST from upvalues captured at construction time rather
+--                than reading the live values each frame. Fixed to reference the
+--                live globals.
+--  [FIX-9.44-G]  espCharacterState() returned stale valid=true when the
+--                humanoid's Health was 0 but HUM_CACHE still held the dead
+--                humanoid. Force-evict cache entry on Health <= 0.
+--  [FIX-9.44-H]  White-team symmetry: when BOTH players are on team White the
+--                old code set enemy=true (both players on no team treated as
+--                enemies of each other). A new S.AM.whiteAsEnemy toggle
+--                (default true) preserves the old fail-closed behavior while
+--                allowing users to flip it for FFA servers.
+--  [FIX-9.44-I]  refreshIgnorePanel sorted by dist when igSortNear=true but
+--                math.huge entries (offline/no-character players) sorted before
+--                real nearby players due to table.sort instability. Now pushes
+--                math.huge to the end explicitly.
+--  [FIX-9.44-J]  makeDraggable preserved AnchorPoint=(0,0) after first drag but
+--                layoutRightDock() resets AnchorPoint to (1,0) on each layout
+--                pass, fighting the dragged position. layoutRightDock now skips
+--                anchor reset for dragged panels.
+--
+--  [NEW-9.44-1]  AIM ASSIST STRENGTH slider (0.0-1.0) exposed in Advanced Suite
+--                Aimbot card. Scales the smoothing curve's output amplitude
+--                independently of S.AM.sm so users can tune "pull strength"
+--                without changing the feel of the smooth curve.
+--  [NEW-9.44-2]  TARGET HISTORY: last 5 locked targets stored in ST.targetHistory
+--                (name + time). Shown in dashboard and Advanced Suite diagnostics.
+--  [NEW-9.44-3]  ESP CHAMS (color-fill Highlights): when S.ES.highlight and
+--                S.ES.chamsFill=true the Highlight FillColor is set instead of
+--                left transparent, giving a solid-color "chams" appearance
+--                through walls when depthCheck is off.
+--  [NEW-9.44-4]  KILL STREAK COUNTER: ST.kills is now tracked and displayed in
+--                the dashboard when S.AC.ks (kill streak display) is enabled.
+--                Resets on death/respawn. Kill is detected by target HP reaching 0.
+--  [NEW-9.44-5]  QUICK-BIND panel: pressing any pill button for > 0.6s opens
+--                a mini rebind dialog for that feature's hotkey without opening
+--                the full settings panel.
+--  [NEW-9.44-6]  SPECTATOR DETECTION: detects when another player is spectating
+--                the local player via a character camera check and warns via
+--                notify() / status dot color change. Configurable interval.
+--  [NEW-9.44-7]  SMART JITTER: when S.AC.jitter=true and aimbot is firing,
+--                adds a randomised sub-pixel walk to the aim output that mimics
+--                natural micro-corrections without affecting average accuracy.
+--
 -- ============================================================
--- RE-EXECUTION GUARD 1
+
+-- ============================================================
+--  All fixes from V9.31 through V9.38 are fully retained.
+--  V9.37-LOWEND adds low-end CPU/memory optimizations on top of V9.36-COMPAT.
+--
+--  ============================================================
+--  V9.37.1-FIXED (applied by HackerAI code review):
+--  [FIX-9.37.1-A] ESP hot path team check was fail-OPEN:
+--    `local enemy = S.ES.tc and espTeamEnemyPass(pl) or true`
+--    evaluates to `true` whenever espTeamEnemyPass() returns false,
+--    so teammates were never invalidated (and were even colored as
+--    enemies). Now: `local enemy = true; if S.ES.tc then enemy =
+--    espTeamEnemyPass(pl) end` -- the claimed fail-closed behavior
+--    actually works.
+--  [FIX-9.37.1-B] InputBegan: `if gpd then return end` moved directly
+--    after the key-rebind (ST._rb) block so F5/F7/Ctrl+F8 and the
+--    F1-F4 feature hotkeys no longer fire on game-processed input.
+--    Order is now: rebind -> gpd -> RMB/LMB arming -> F7 -> Ctrl+F8
+--    -> F5 -> F1-F4 hotkeys.
+--  [FIX-9.37.1-C] refreshIgnorePanel 50 ms force-debounce now DEFERS a
+--    trailing rebuild instead of dropping the final call, so the last
+--    keystroke/scroll click always renders.
+--  [FIX-9.37.1-D] Drag release is now detected by a global
+--    UI.InputEnded hook keyed on the ACTIVE_DRAG input object.
+--    Per-drag InputObject.Changed release detection removed (pooled
+--    InputObjects do not reliably fire Changed; drags could stick).
+--  [FIX-9.37.1-E] HUM_CACHE entries are identity-checked
+--    (h.Parent == c) in al() and espCharacterState() so a replaced
+--    Humanoid inside the same character model cannot poison the cache.
+--  [FIX-9.37.1-F] Local `rs` UIStroke shadow in makeToggle renamed to
+--    `stroke` (removes shadowing of the rs() name generator).
+--  [FIX-9.37.1-G] Restore-bar docked offset clamped; setfpscap(0)
+--    normalized to 9999 to match the fps_unlock branch below it.
+--  ============================================================
+--
+--  V9.36-COMPAT additional cross-executor hardening:
+--  [COMPAT-1]  math.pow() -> ^ operator to avoid an unnecessary library call;
+--              the native Luau exponent operator is used for these hot paths.
+--  [COMPAT-2]  clearLOSCForChar(): two-pass pairs-safe deletion
+--              (Madium V2 and Fluxus pairs() instability on current-key nil)
+--  [COMPAT-3]  los(): RAY_FILTER[1] falls back to WS when ME.Character==nil
+--              (all executors during respawn; stricter on Madium V2/SynX)
+--  [COMPAT-4]  isEnemy(): TeamColor reads pcall-guarded (Madium V2, SynX,
+--              Script-Ware anti-cheat property hook protection)
+--  [COMPAT-5]  _G.__V94OPSYX_CL(): CHAR_CONNS/LP/CHARS two-pass cleanup
+--              (Madium V2, Fluxus pairs() safety)
+--  [COMPAT-6]  WaitForChild("PlayerGui") given 10s timeout in cg() and
+--              mobile UI block (Madium V2 early injection, Krnl, Fluxus)
+--  [COMPAT-7]  UI:GetFocusedTextBox() pcall-guarded in InputBegan handler
+--              (Synapse X legacy, Krnl older builds, Fluxus)
+--  [COMPAT-8]  GetAttribute() pcall-guarded in scroll button handlers
+--              (Synapse X legacy targets, Krnl older builds)
+--  [COMPAT-9]  RNG seed computation overflow-safe for 32-bit Luau builds
+--              (Krnl 32-bit, Fluxus 32-bit, older Madium V2)
+--  [COMPAT-10] Drawing probe calls removed; type() guard is sufficient
+--              (Madium V2 lazy Drawing init, Fluxus)
+--  [COMPAT-11] Dead code flushAimCache() removed
+--  [COMPAT-12] SetAttribute() calls pcall-guarded in refreshIgnorePanel
+--              (same older-client guard as GetAttribute)
+--  [FIX-UI-DRAG] Main / Ignore List / Settings / Mobile panels now support
+--              mouse + touch dragging with viewport clamping; responsive
+--              layout no longer snaps a manually moved panel back.
+--  [FIX-HOLD-AIM-IMMEDIATE] RMB hold latches `aiming = true` directly in
+--              InputBegan and clears it in InputEnded, removing RenderStepped activation delay.
+--  No webhook. No data collection. No outbound networking.
+--  [PERF-1] Responsive layout is state/viewport-gated instead of rewriting
+--           panel positions every RenderStepped on stable frames.
+--  [PERF-2] FOV slider consumes InputObject positions instead of polling the
+--           global mouse position every RenderStepped while dragging.
+--  [COMPAT-13] RaycastParams prefers ExcludeInstances with legacy fallback.
+--  [COMPAT-14] Mouse-helper capability now respects UI.MouseEnabled.
+--  [COMPAT-15] Raycast ExcludeInstances support is detected by a guarded write,
+--             preventing false-positive capability detection on older clients.
+--
+--  V9.37-LOWEND optimizations (low-end PC / low-power CPU focus):
+--  [PERF-3] forceWallCheck() removed from per-frame RenderStepped; moved to
+--           startup and ME.CharacterAdded. Was a no-op write every frame.
+--  [PERF-4] fr() (root-part finder) now uses PART_CACHE_ROOT as primary
+--           lookup, eliminating repeated FindFirstChild iterations in hot paths.
+--  [PERF-5] HUM_CACHE added: al() and ESP Humanoid lookups now cached per
+--           character, replacing FindFirstChildOfClass on every scan frame.
+--           Cache invalidated on character change, respawn, and removal.
+--  [PERF-6] FC.NumSides write removed from per-tick FOV update (was
+--           unconditionally writing 64 every tick; set once at init instead).
+--           HP color recomputed only when HP ratio changes (1% granularity),
+--           eliminating per-tick Color3 allocations when HP is stable.
+--  [PERF-7] All panel/slider UI.InputChanged connections consolidated into
+--           one shared handler (ACTIVE_DRAG). Previously 5 separate listeners
+--           all fired on every mouse-move event. Single dispatcher cuts that
+--           to one nil-check per mouse-move when no drag is active.
+--  [PERF-8] refreshIgnorePanel force-rebuilds debounced at 50 ms minimum.
+--           Prevents burst Instance alloc/destroy on rapid typing or scrolling.
+--  [PERF-9] LOSC (wall-check result cache) periodic stale-entry sweep added.
+--  [PERF-10] Root/head cache paths no longer return generic fallback parts when
+--            a real root/head exists; reduces repeated hierarchy searches.
+--  [FIX-ASYNC] Delayed callbacks carry a lifecycle token and self-cancel after unload.
+--           Entries older than 5s pruned every 10s to bound table growth on
+--           long sessions / high-player servers.
+--  [FIX-ESP-FILTER] ESP now enforces validity -> ignore -> team before any
+--           character/humanoid/root, distance, projection, or render work.
+--           Filtered players are removed immediately and cannot be recreated
+--           until they qualify again.
+--  [FIX-ESP-LIVE] Ignore-list changes, player Team/TeamColor changes, and
+--           LocalPlayer team changes immediately reconcile the ESP set.
+--  [FIX-ESP-RESPAWN] Respawn/player removal invalidates stale ESP and cache
+--           state so filtered players cannot resurrect old overlays.
+--  [FIX-ESP-CHAR-REMOVE] CharacterRemoving closes the death/respawn stale-ESP gap.
+--  [FIX-ESP-TEAM-FAILCLOSED] ESP team-check fails closed on protected TeamColor reads.
+--  [PERF-ESP-TEAMCACHE] ESP team relationships are cached and invalidated only
+--           on Team/TeamColor changes or player removal, eliminating repeated
+--           protected TeamColor reads from the periodic ESP hot path.
+--  [FIX-ESP-OWNERSHIP] ESP objects are generation/character-owned; stale or
+--           reparented overlays are rejected and rebuilt instead of reused.
+--  [HARDEN-ESP-INTEGRITY] ESP update path fails closed on ownership/team drift.
+--  [PERF-11] Player list is event-synchronized; hot paths no longer allocate
+--           a fresh Players:GetPlayers() array for scans/ESP/diagnostics.
+--  [PERF-12] Targeting team relations are cached and invalidated on team changes.
+--  [PERF-13] Prediction cache objects are updated in place to reduce GC churn.
+--  [PERF-14] FOV slider updates directly from InputChanged; no RenderStepped poll.
+--  [HARDEN-ESP-ROOT] ESP creation now receives the validated root/humanoid
+--                 instead of relying on an undeclared root reference.
+--  [FIX-ESP-VISIBILITY] VISIBILITY now clears Drawing extras as well as labels.
+--  [ADV-ESP] Smart culling, nearest-player cap, distance fade, graphical
+--           health bars, and Highlight depth mode are available as opt-in
+--           visual/performance mechanics.
+--  [PROTECT-UI-REPAIR] Detached OPSYX ScreenGui is repaired before escalation.
+--  [FIX-HOLD-RELEASE-GUARD] stale mouse state cannot re-arm after RMB release.
+--  [FIX-HOLD-TOGGLE] enabling hold-aim disables free-running normal aimbot.
+--  [FIX-TRIGGER-QUEUE] delayed trigger actions are single-flight, exception-safe,
+--           and lifecycle-safe.
+-- ============================================================
+
+-- ============================================================
+-- RE-EXECUTION GUARD
 -- If OPSYX is already running, unload the previous instance first
 -- so the new execution starts cleanly without duplicate UI/connections.
 -- ============================================================
@@ -2021,6 +2245,10 @@ local function setFeatureToggle(name, desired)
     if ST and ST.fcStats then
         ST.fcStats.featureActions = (ST.fcStats.featureActions or 0) + 1
     end
+    if ST and ST.v39 then
+        ST.v39.profileDirty = true
+        ST.v39.profileDirtyReason = "Feature state changed: " .. tostring(name)
+    end
     pcall(refreshMainFeaturePills)
     return true, actual
 end
@@ -2101,19 +2329,25 @@ registerFeatureToggle("targetSwitching", function() return S.AM.targetSwitching 
     S.AM.targetSwitching = v
 end)
 
-registerFeatureToggle("crosshair", function() return S.V40.crosshair end, function(v)
-    S.V40.crosshair = v
-    if not v and type(_G.__V94OPSYX_V40_REFRESH) == "function" then
+registerFeatureToggle("crosshair", function() return S.V40.crosshair == true end, function(v)
+    S.V40.crosshair = v == true
+    if type(_G.__V94OPSYX_V40_REFRESH) == "function" then
         pcall(_G.__V94OPSYX_V40_REFRESH)
     end
 end)
 
-registerFeatureToggle("crosshairDot", function() return S.V40.crosshairDot end, function(v)
-    S.V40.crosshairDot = v
+registerFeatureToggle("crosshairDot", function() return S.V40.crosshairDot == true end, function(v)
+    S.V40.crosshairDot = v == true
+    if type(_G.__V94OPSYX_V40_REFRESH) == "function" then
+        pcall(_G.__V94OPSYX_V40_REFRESH)
+    end
 end)
 
 registerFeatureToggle("crosshairOutline", function() return S.V40.crosshairOutline ~= false end, function(v)
-    S.V40.crosshairOutline = v
+    S.V40.crosshairOutline = v ~= false
+    if type(_G.__V94OPSYX_V40_REFRESH) == "function" then
+        pcall(_G.__V94OPSYX_V40_REFRESH)
+    end
 end)
 
 local function registerESPSubToggle(name, field)
@@ -4292,7 +4526,9 @@ local function cg()
             version = "9.41.1",
             profile = FC_PROFILE,
             slot = FC_SLOT,
-            KB = {am=C.S.KB.am, es=C.S.KB.es, sl=C.S.KB.sl, tr=C.S.KB.tr},
+            KB = {am=C.S.KB.am, es=C.S.KB.es, sl=C.S.KB.sl, tr=C.S.KB.tr,
+                  hold=C.S.KB.hold, feature=C.S.KB.feature, hide=C.S.KB.hide, master=C.S.KB.master,
+                  panic=C.S.KB.panic, advanced=C.S.KB.advanced},
             AM = {on=C.S.AM.on, sm=C.S.AM.sm, md=C.S.AM.md, pd=C.S.AM.pd, tc=C.S.AM.tc, lo=C.S.AM.lo},
             SL = {on=C.S.SL.on, sm=C.S.SL.sm, md=C.S.SL.md, tc=C.S.SL.tc, pd=C.S.SL.pd, sp=C.S.SL.sp},
             TR = {on=C.S.TR.on, dl=C.S.TR.dl, md=C.S.TR.md, rd=C.S.TR.rd, tc=C.S.TR.tc, hr=C.S.TR.hr},
@@ -4336,10 +4572,16 @@ local function cg()
         cp(C.S.AM,d.AM); cp(C.S.SL,d.SL); cp(C.S.TR,d.TR); cp(C.S.ES,d.ES)
         cp(C.S.FV,d.FV); cp(C.S.AC,d.AC); cp(C.S.TP,d.TP); cp(C.S.V39,d.V39); cp(C.S.V40,d.V40)
         if d.V40 then
-            C.S.AM.targetPart = C.S.V40.targetPart
-            C.S.AM.priority = C.S.V40.priority
-            C.S.AM.sticky = C.S.V40.sticky
-            C.S.AM.stickyMargin = C.S.V40.stickyMargin
+            if type(C.S.V40.targetPart) == "string" and C.S.V40.targetPart ~= "" then
+                C.S.AM.targetPart = C.S.V40.targetPart
+            end
+            if type(C.S.V40.priority) == "string" and C.S.V40.priority ~= "" then
+                C.S.AM.priority = C.S.V40.priority
+            end
+            if type(C.S.V40.sticky) == "boolean" then
+                C.S.AM.sticky = C.S.V40.sticky
+            end
+            C.S.AM.stickyMargin = cl(tonumber(C.S.V40.stickyMargin) or C.S.AM.stickyMargin or 45, 0, 250)
             if type(_G.__V94OPSYX_V40_REFRESH) == "function" then
                 pcall(_G.__V94OPSYX_V40_REFRESH)
             end
@@ -4387,12 +4629,60 @@ local function cg()
     local function fcValidateConfig(d)
         if type(d) ~= "table" then return false, "Root is not a table" end
         if type(d.version) ~= "string" then return false, "Missing version" end
+
         local function numRange(tbl, key, lo, hi, label)
             if not tbl or tbl[key] == nil then return true end
             local n = tonumber(tbl[key])
             if not n or n ~= n or n < lo or n > hi then return false, label end
             return true
         end
+        local function boolField(tbl, key, label)
+            if tbl and tbl[key] ~= nil and type(tbl[key]) ~= "boolean" then return false, label end
+            return true
+        end
+
+        local kbKeys = {"am","es","sl","tr","hold","feature","hide","master","panic","advanced"}
+        if d.KB ~= nil then
+            if type(d.KB) ~= "table" then return false, "Invalid keybind table" end
+            local seen = {}
+            for i = 1, #kbKeys do
+                local key = kbKeys[i]
+                local value = d.KB[key]
+                if value ~= nil then
+                    local resolved = ef(value)
+                    if value ~= "" and resolved == nil then
+                        return false, "Invalid keybind: " .. key
+                    end
+                    if resolved ~= nil then
+                        if seen[resolved] then
+                            return false, "Duplicate keybind: " .. key .. "/" .. seen[resolved]
+                        end
+                        seen[resolved] = key
+                    end
+                end
+            end
+        end
+
+        if d.V40 ~= nil and type(d.V40) ~= "table" then return false, "Invalid V40 table" end
+        if d.V40 then
+            local ok, why = boolField(d.V40, "crosshair", "Invalid V40 crosshair")
+            if not ok then return false, why end
+            ok, why = boolField(d.V40, "crosshairDot", "Invalid V40 crosshair dot")
+            if not ok then return false, why end
+            ok, why = boolField(d.V40, "crosshairDynamic", "Invalid V40 crosshair dynamic")
+            if not ok then return false, why end
+            ok, why = boolField(d.V40, "crosshairOutline", "Invalid V40 crosshair outline")
+            if not ok then return false, why end
+            ok, why = numRange(d.V40, "crosshairSize", 3, 32, "Invalid crosshair size")
+            if not ok then return false, why end
+            ok, why = numRange(d.V40, "crosshairGap", 0, 24, "Invalid crosshair gap")
+            if not ok then return false, why end
+            ok, why = numRange(d.V40, "crosshairThickness", 1, 6, "Invalid crosshair thickness")
+            if not ok then return false, why end
+            ok, why = numRange(d.V40, "crosshairOpacity", 0.10, 1, "Invalid crosshair opacity")
+            if not ok then return false, why end
+        end
+
         local ok, why = numRange(d.AM, "sm", 0, 1, "Invalid aim smoothing")
         if not ok then return false, why end
         ok, why = numRange(d.ES, "md", 100, C.ESP_MAX_RANGE, "Invalid ESP range")
@@ -4809,30 +5099,35 @@ local function cg()
         return true, "Profile loaded"
     end
     local function fcReset()
-        C.S.KB = {am="F1",es="F2",sl="F3",tr="F4",hold="F5",feature="F6",hide="F7",master="F8",panic="F9",advanced="F10"}
-        C.S.AM = {on=false,sm=0.35,md=1000,pd=0.06,tc=true,wc=true,lo=0.12,
-            targetPart="Head",priority="CROSSHAIR",sticky=true,stickyMargin=45}
-        C.S.SL = {on=false,sm=0.3,md=1000,tc=true,wc=true,pd=0.05,sp=0.05}
-        C.S.TR = {on=false,dl=0.05,md=1000,rd=true,tc=true,wc=true,hr=0.09}
-        C.S.ES = {on=false,md=C.ESP_MAX_RANGE,sd=60,tc=true,
-            ce=Color3.fromRGB(255,60,60),ct=Color3.fromRGB(60,200,60),
-            name=true,health=true,distance=true,highlight=true,visibility=true,
-            tracer=false,offscreen=false,skeleton=false,status=false,espPreset="CUSTOM",
-            updateRate=15,smartCull=true,distanceFade=true,healthbar=false,depthCheck=true,
-            maxVisible=32,espAdvancedMode="SMART"}
-        C.S.FV = {on=true,r=130,c=Color3.fromRGB(255,255,255),th=1.5,fl=false,tr=0.55}
-        C.S.AC = {nm=true,rg=9,hz=true,cl=true,hi=true}
-        C.S.TP = {on=false,min=6,max=14}
-        C.S.V39 = {safeMode=false,watchdog=true,autoRecover=true,adaptive=true,diagnostics=true,sessionLog=true,
-                 maxRecoveries=3,fpsLow=25,fpsMedium=40,fpsHigh=60,layoutLocked=false,snapPanels=true,
-                 profileAutoBackup=true,profileAutoMigration=true,protection=true,detectIntegrity=true,
-                 sanitizeState=true,protectionInterval=1.0,protectionFaultLimit=3}
-        C.S.V40 = {targetPart="Head",priority="CROSSHAIR",sticky=true,stickyMargin=45,crosshair=false,crosshairDot=false,crosshairDynamic=false,
-                 crosshairSize=7,crosshairGap=5,crosshairThickness=1.5,espPreset="CUSTOM",performance="BALANCED",fpsGuard=true,fpsFloor=30,
-                 theme="MIDNIGHT",notify=true,layout="STANDARD",autoProfileBackup=true}
+        C.S.KB = {am="F1", es="F2", sl="F3", tr="F4", hold="F5", feature="F6", hide="F7", master="F8", panic="F9", advanced="F10"}
+        C.S.AM = {on=false, sm=0.35, md=1000, pd=0.06, tc=true, wc=true, lo=0.12,
+            targetPart="Head", priority="CROSSHAIR", sticky=true, stickyMargin=45,
+            targetLock=true, targetSwitching=true, aliveCheck=true, sensitivity=1.0,
+            activationMode="TOGGLE", holdMode=false, whiteAsEnemy=true, strength=1.0, jitter=false}
+        C.S.SL = {on=false, sm=0.3, md=1000, tc=true, wc=true, pd=0.05, sp=0.05}
+        C.S.TR = {on=false, dl=0.05, md=1000, rd=true, tc=true, wc=true, hr=0.09}
+        C.S.ES = {on=false, md=C.ESP_MAX_RANGE, sd=60, tc=true,
+            ce=Color3.fromRGB(255,60,60), ct=Color3.fromRGB(60,200,60),
+            name=true, health=true, distance=true, highlight=true, visibility=true,
+            tracer=false, offscreen=false, skeleton=false, status=false, espPreset="CUSTOM",
+            updateRate=30, smartCull=true, distanceFade=true, healthbar=false, depthCheck=true,
+            highlightWall=true, maxVisible=32, espAdvancedMode="SMART", chamsFill=false}
+        C.S.FV = {on=true, r=130, c=Color3.fromRGB(255,255,255), th=1.5, fl=false, tr=0.55}
+        C.S.AC = {nm=true, rg=9, hz=true, cl=true, hi=true, ks=true, spectatorCheck=true, spectatorInterval=5,
+            acDetect=true, acDetectInterval=3, acThreshold=5}
+        C.S.TP = {on=false, min=6, max=14}
+        C.S.V39 = {safeMode=false, watchdog=true, autoRecover=true, adaptive=true, diagnostics=true,
+            acSafeTrip=true, acSafeTripCooldown=30, sessionLog=true, maxRecoveries=3, fpsLow=25, fpsMedium=40,
+            fpsHigh=60, layoutLocked=false, snapPanels=true, profileAutoBackup=true, profileAutoMigration=true,
+            protection=true, detectIntegrity=true, sanitizeState=true, protectionInterval=1.0, protectionFaultLimit=3}
+        C.S.V40 = {targetPart="Head", priority="CROSSHAIR", sticky=true, stickyMargin=45,
+            crosshair=false, crosshairDot=false, crosshairDynamic=false, crosshairOutline=true, crosshairOpacity=1.0,
+            crosshairSize=7, crosshairGap=5, crosshairThickness=1.5, espPreset="CUSTOM", performance="BALANCED",
+            fpsGuard=true, fpsFloor=30, lightweight=false, targetScanRate=120, uiUpdateRate=30,
+            uiScale=1.0, compactMode=false, uiSpacing=6, transparency=0.03, theme="MIDNIGHT", notify=true,
+            layout="STANDARD", runtimePaused=false, suiteVisible=false, autoProfileBackup=true}
         C.S.AM.targetPart="Head"; C.S.AM.priority="CROSSHAIR"; C.S.AM.sticky=true; C.S.AM.stickyMargin=45
-        C.S.ES.tracer=false; C.S.ES.offscreen=false; C.S.ES.skeleton=false; C.S.ES.status=false; C.S.ES.espPreset="CUSTOM"
-        C.S.ES.smartCull=true; C.S.ES.distanceFade=true; C.S.ES.healthbar=false; C.S.ES.depthCheck=true; C.S.ES.maxVisible=32; C.S.ES.espAdvancedMode="SMART"; C.S.ES.box=false; C.S.ES.boxFill=false; C.S.ES.targetGlow=false
+        C.S.ES.espPreset="CUSTOM"; C.S.ES.smartCull=true; C.S.ES.distanceFade=true; C.S.ES.healthbar=false; C.S.ES.depthCheck=true
         ST.v39.safeMode=false; ST.v39.safeReason=""; ST.v39.recoveryCount=0; ST.v39.performanceState="BALANCED"
         ST.v39.lastRecoveryName=""; ST.v39.lastRecoveryT=0; ST.v39.overloadScore=0; ST.v39.frameMs=0; ST.v39.frameMsEMA=0
         ST.v39.protectLastMs=0; ST.v39.protectSlow=0; ST.v39.protectFaults=0; ST.v39.protectRepairs=0; ST.v39.protectChecks=0; ST.v39.protectStatus="READY"; ST.v39.protectLast=""
@@ -4843,8 +5138,8 @@ local function cg()
         ST.arm = false; ST.htArm = false; ST.holdReleased = false; ST.holdReleaseT = 0
         MASTER_UI_HIDDEN = false
         FC_QUICK_MODE = "BALANCED"
-        ST.v39.profileDirty = false
-        ST.v39.profileDirtyReason = ""
+        ST.v39.profileDirty = true
+        ST.v39.profileDirtyReason = "Settings reset; save profile to persist"
         if C.GUI.uiScale then C.GUI.uiScale.Scale=1 end
         ST.uiPositions = {}
         C.forceWallCheck()
@@ -4856,10 +5151,9 @@ local function cg()
         if C.GUI.setPanel then C.GUI.setPanel.Visible=false end
         if C.GUI.kbBtns then for k,b in pairs(C.GUI.kbBtns) do if b and b.Parent then b.Text=C.S.KB[k] or "NONE" end end end
         if C.GUI.v40BindBtns then for k,b in pairs(C.GUI.v40BindBtns) do if b and b.Parent then b.Text=(k:upper()) .. "  •  " .. tostring(C.S.KB[k] or "NONE") end end end
-        C.layoutRightDock()
+        if C.GUI.uiScale then C.layoutRightDock() end
         return true, "Settings reset"
     end
-
     local function fcKeyAudit()
         local seen, conflicts = {}, {}
         for k,v in pairs(C.S.KB) do
@@ -4902,6 +5196,28 @@ local function cg()
     C.GUI.featureRestoreBackup = fcRestoreBackup
     C.GUI.featureReset = fcReset
     C.GUI.featureSetSlot = fcSetSlot
+    C.GUI.featureConfigStatus = function()
+        local canRead = type(readfile) == "function"
+        local canWrite = type(writefile) == "function"
+        local canCheck = type(isfile) == "function"
+        local exists, backupExists = false, false
+        if canCheck then
+            pcall(function() exists = isfile(FC_PATH) == true end)
+            pcall(function() backupExists = isfile(FC_PATH .. ".bak") == true end)
+        end
+        return {
+            profile=FC_PROFILE, path=FC_PATH,
+            ioReady=canRead and canWrite and canCheck,
+            saveReady=canRead and canWrite and canCheck,
+            loadReady=canRead and canCheck,
+            backupReady=canRead and canWrite and canCheck,
+            exists=exists, backupExists=backupExists,
+            dirty=ST.v39.profileDirty == true,
+            dirtyReason=tostring(ST.v39.profileDirtyReason or ""),
+            lastSave=tonumber(ST.v39.profileLastSave) or 0,
+            lastLoad=tonumber(ST.v39.profileLastLoad) or 0,
+        }
+    end
 
     local fcRows = {}
     local fcButtonIndex = 0
@@ -5090,6 +5406,8 @@ ST._okIn, ST._errIn = pcall(function()
                 end
 
                 S.KB[rb.key] = nn
+                ST.v39.profileDirty = true
+                ST.v39.profileDirtyReason = "Keybind changed: " .. tostring(rb.key)
                 local shown = nn ~= "" and nn or "NONE"
                 pcall(function() rb.btn.Text = shown; rb.btn.TextColor3 = UI_ACTIVE end)
                 if GUI.kbBtns and GUI.kbBtns[rb.key] then
@@ -7686,6 +8004,15 @@ ST.setupV40 = function()
             end)
             if crossCount > 1 then issues[#issues + 1] = "DUP_CROSSHAIR" end
 
+            local configStatus = C.GUI.featureConfigStatus and C.GUI.featureConfigStatus() or nil
+            local configLine = configStatus and string.format(
+                "PROFILE:%s • FILE:%s • DIRTY:%s • IO:%s",
+                tostring(configStatus.profile),
+                configStatus.exists and "FOUND" or "NONE",
+                configStatus.dirty and "YES" or "NO",
+                configStatus.ioReady and "READY" or "UNAVAILABLE"
+            ) or "PROFILE:UNKNOWN"
+
             local status
             if #issues == 0 then
                 status = "OK"
@@ -7696,13 +8023,14 @@ ST.setupV40 = function()
             end
             local details = #issues > 0 and table.concat(issues, ", ") or "NONE"
             local result = string.format(
-                "VALIDATION: %s\nUI:%s • CONFIG:%s • KEYS:%s • CONNECTIONS:%d • CROSSHAIR:%s\nISSUES: %s",
+                "VALIDATION: %s\nUI:%s • CONFIG:%s • KEYS:%s • CONNECTIONS:%d • CROSSHAIR:%s\n%s\nISSUES: %s",
                 status,
                 (suite and suite.Parent and scroll.Parent == suite and content.Parent == scroll) and "OK" or "ERROR",
                 #issues == 0 and "OK" or "CHECK",
                 keyAudit(),
                 #ADV_CONNS,
                 (crossCount <= 1 and next(ADV.duplicateControlKeys) == nil and "OK" or "ERROR"),
+                configLine,
                 details
             )
             if ADV.validation and ADV.validation.Parent then
@@ -7993,6 +8321,18 @@ ST.setupV40 = function()
                         callback()
                     end
                 end)
+                if ok and ST.v39 then
+                    local nonPersistentAction = (
+                        key == "validate_run" or key == "validate_keys" or key == "validate_save" or
+                        key == "validate_load" or key == "validate_backup" or key == "validate_repair" or
+                        key == "profile_copy" or key == "profile_export" or key == "profile_report" or
+                        key == "diag_run" or key == "diag_export"
+                    )
+                    if not nonPersistentAction then
+                        ST.v39.profileDirty = true
+                        ST.v39.profileDirtyReason = "Advanced setting changed: " .. tostring(key)
+                    end
+                end
                 if not ok then
                     notify("ERROR: " .. tostring(err):sub(1, 110))
                     v39Log("ADV_UI", key .. ": " .. tostring(err))
@@ -8643,7 +8983,8 @@ ST.setupV40 = function()
         for i = 1, #keyItems do
             local item = keyItems[i]
             local label, keyName = item[1], item[2]
-            local b = makeAdvButton(keyCard, "key_" .. keyName, "", function()
+            local b
+            b = makeAdvButton(keyCard, "key_" .. keyName, "", function()
                 beginKeyRebind(b, keyName)
             end, {order=i * 10})
             GUI.v40BindBtns[keyName] = b
@@ -8654,6 +8995,13 @@ ST.setupV40 = function()
                 hold="F5", feature="F6", hide="F7", master="F8",
                 panic="F9", advanced="F10",
             })
+            ST.v39.profileDirty = true
+            ST.v39.profileDirtyReason = "Keybinds reset"
+            if GUI.kbBtns then
+                for k,b in pairs(GUI.kbBtns) do
+                    if b and b.Parent then b.Text = S.KB[k] or "NONE" end
+                end
+            end
             if ST._rb and ST._rb.btn then
                 pcall(function()
                     ST._rb.btn.TextColor3 = UI_TEXT_PRIMARY
@@ -8774,6 +9122,27 @@ ST.setupV40 = function()
         makeAdvButton(validationCard, "validate_keys", "KEY AUDIT", function()
             notify(keyAudit())
         end, {order=30})
+
+        makeAdvButton(validationCard, "validate_save", "SAVE PROFILE", function()
+            local ok, msg = false, "Profile save unavailable"
+            if C.GUI.featureSave then ok, msg = C.GUI.featureSave() end
+            notify(ok and tostring(msg) or ("CONFIG: " .. tostring(msg)))
+            pcall(ADV.refresh); pcall(validate)
+        end, {order=35})
+
+        makeAdvButton(validationCard, "validate_load", "LOAD PROFILE", function()
+            local ok, msg = false, "Profile load unavailable"
+            if C.GUI.featureLoad then ok, msg = C.GUI.featureLoad() end
+            notify(ok and tostring(msg) or ("CONFIG: " .. tostring(msg)))
+            pcall(ADV.refresh); pcall(validate)
+        end, {order=36})
+
+        makeAdvButton(validationCard, "validate_backup", "RESTORE BACKUP", function()
+            local ok, msg = false, "Backup restore unavailable"
+            if C.GUI.featureRestoreBackup then ok, msg = C.GUI.featureRestoreBackup() end
+            notify(ok and tostring(msg) or ("CONFIG: " .. tostring(msg)))
+            pcall(ADV.refresh); pcall(validate)
+        end, {order=37})
 
         makeAdvButton(validationCard, "validate_repair", "REPAIR UI STATE", function()
             local repaired = false
@@ -9298,20 +9667,22 @@ ST.setupV40 = function()
                     {0, -size-gap, 0, -gap},
                     {0, gap, 0, gap+size}
                 }
+                local drawingOK = true
                 for i = 1, 4 do
                     local outline = crossOutlineLines[i]
-                    if outline then
-                        pcall(function()
+                    if STATE.crosshairOutline ~= false and outline then
+                        local okOutline = pcall(function()
                             outline.From = Vector2.new(cx + seg[i][1], cy + seg[i][2])
                             outline.To = Vector2.new(cx + seg[i][3], cy + seg[i][4])
                             outline.Thickness = thick + 2
                             outline.Transparency = transparency
-                            outline.Visible = STATE.crosshairOutline ~= false
+                            outline.Visible = true
                         end)
+                        if not okOutline then drawingOK = false end
                     end
                     local line = crossLines[i]
                     if line then
-                        pcall(function()
+                        local okLine = pcall(function()
                             line.From = Vector2.new(cx + seg[i][1], cy + seg[i][2])
                             line.To = Vector2.new(cx + seg[i][3], cy + seg[i][4])
                             line.Color = col
@@ -9319,28 +9690,46 @@ ST.setupV40 = function()
                             line.Transparency = transparency
                             line.Visible = true
                         end)
+                        if not okLine then drawingOK = false end
+                    else
+                        drawingOK = false
                     end
                 end
 
                 if drawingDot then
-                    pcall(function()
+                    local okDot = pcall(function()
                         drawingDot.Position = Vector2.new(cx, cy)
                         drawingDot.Radius = STATE.crosshairDot and 2 or 0
                         drawingDot.Color = col
                         drawingDot.Transparency = transparency
                         drawingDot.Visible = STATE.crosshairDot
                     end)
+                    if not okDot then drawingOK = false end
                 end
-                if drawingDotOutline then
-                    pcall(function()
+                if drawingDotOutline and STATE.crosshairDot and STATE.crosshairOutline ~= false then
+                    local okDotOutline = pcall(function()
                         drawingDotOutline.Position = Vector2.new(cx, cy)
-                        drawingDotOutline.Radius = STATE.crosshairDot and 3.5 or 0
+                        drawingDotOutline.Radius = 3.5
                         drawingDotOutline.Transparency = transparency
-                        drawingDotOutline.Visible = STATE.crosshairDot and STATE.crosshairOutline ~= false
+                        drawingDotOutline.Visible = true
                     end)
+                    if not okDotOutline then drawingOK = false end
                 end
-                hideGuiCrosshair()
-                return
+                if drawingOK then
+                    hideGuiCrosshair()
+                    return
+                end
+
+                -- Some Drawing implementations expose the constructor but reject
+                -- one or more properties. Disable Drawing and fall through to GUI.
+                drawingUsable = false
+                for i = 1, #crossLines do pcall(function() crossLines[i]:Remove() end) end
+                for i = 1, #crossOutlineLines do pcall(function() crossOutlineLines[i]:Remove() end) end
+                if drawingDot then pcall(function() drawingDot:Remove() end) end
+                if drawingDotOutline then pcall(function() drawingDotOutline:Remove() end) end
+                crossLines, crossOutlineLines = {}, {}
+                drawingDot, drawingDotOutline = nil, nil
+                drawingAttempted = true
             end
 
             -- GUI fallback when Drawing is unavailable or failed to initialize.
@@ -9626,6 +10015,7 @@ ST.setupV40 = function()
         _G.__V94OPSYX_V40_REFRESH = function()
             STATE = S.V40
             pcall(applySync)
+            pcall(updateCrosshair)
             pcall(ADV.refresh)
             pcall(updateProtectionLabels)
             pcall(refreshMainFeaturePills)
@@ -9876,4 +10266,112 @@ function _G.__V94OPSYX_CL()
     v39Log("CLEANUP", "complete")
     _G.__V94OPSYX_LD = nil; _G.__V94OPSYX_CL = nil
 end
-print("OPSYX Loaded")
+print(string.rep("=",62))
+print("  V9.45.3 OPSYX  |  VERTICAL ADVANCED SUITE  |  NO WEBHOOK")
+print("  [FIX-UI-ADV-DECK] Advanced Suite spawns directly below and aligned to Control Deck")
+print("  [NEW-9.45.1] Advanced Suite: 10-section vertical, scrollable, responsive layout")
+print("  [FIX-9.45.1-A] Centralized Advanced Suite control/state synchronization")
+print("  [FIX-9.45.1-B] Managed Advanced Suite connection lifecycle + rebind safety")
+print("  [FIX-9.45.1-C] Crosshair ownership/outline/opacity + duplicate prevention")
+print("  [FIX-9.45.1-D] Validation + OPSYX-only diagnostics/repair")
+print("  All V9.31-V9.43 fixes + V9.44 Bug Fixes & New Features.")
+print("  [FIX-9.44-A]  NEAREST_VISIBLE actually enforces LOS (wc path)")
+print("  [FIX-9.44-B]  Triggerbot sc() uses task.delay, not tw() in tsp")
+print("  [FIX-9.44-C]  Config import validates all numerics with cl()")
+print("  [FIX-9.44-D]  FOV slider clamps S.FV.r at both ends")
+print("  [FIX-9.44-E]  purgeStalePredCache wired into LOSC sweep")
+print("  [FIX-9.44-F]  Dashboard reads live FPS_SHOWN/#PLAYER_LIST")
+print("  [FIX-9.44-G]  espCharacterState evicts HUM_CACHE on Health<=0")
+print("  [FIX-9.44-H]  White-team symmetry: S.AM.whiteAsEnemy toggle")
+print("  [FIX-9.44-I]  Ignore panel sort pushes math.huge to bottom")
+print("  [FIX-9.44-J]  layoutRightDock skips anchor reset on dragged panels")
+print("  [NEW-9.44-1]  AIM ASSIST STRENGTH slider (S.AM.strength 0.0-1.0)")
+print("  [NEW-9.44-2]  TARGET HISTORY ring (last 5 targets, name+part+time)")
+print("  [NEW-9.44-3]  ESP CHAMS fill (S.ES.chamsFill=true solid highlight)")
+print("  [NEW-9.44-4]  KILL STREAK counter (ST.kills, resets on death)")
+print("  [NEW-9.44-5]  QUICK-BIND hold-to-rebind on pill buttons")
+print("  [NEW-9.44-6]  SPECTATOR DETECTION (periodic, status dot warning)")
+print("  [NEW-9.44-7]  SMART JITTER (S.AM.jitter, sub-pixel noise on aim)")
+print("  [COMPAT-1]  ^ operator used for hot-path exponentiation")
+print("  [COMPAT-2]  clearLOSCForChar two-pass (Madium V2, Fluxus)")
+print("  [COMPAT-3]  RAY_FILTER nil-guard respawn (all executors)")
+print("  [COMPAT-4]  isEnemy TeamColor pcall (Madium V2, SynX, SW)")
+print("  [COMPAT-5]  cleanup two-pass loops (Madium V2, Fluxus)")
+print("  [COMPAT-6]  WaitForChild 10s timeout (Madium V2, Krnl, Fluxus)")
+print("  [COMPAT-7]  GetFocusedTextBox pcall (SynX legacy, Krnl, Fluxus)")
+print("  [COMPAT-8]  GetAttribute pcall (SynX legacy, Krnl)")
+print("  [COMPAT-9]  RNG seed 32-bit safe (Krnl/Fluxus 32-bit, Madium V2)")
+print("  [COMPAT-10] Drawing probe removed (Madium V2, Fluxus)")
+print("  [COMPAT-11] flushAimCache dead code removed")
+print("  [COMPAT-12] SetAttribute pcall (SynX legacy, Krnl)")
+print("  [COMPAT-15] ExcludeInstances guarded-write capability detection")
+print("  [FIX-1]     PlayerRemoving clears PART_CACHE_ROOT/HEAD/LOSC")
+print("  [FIX-ESP-FILTER] ESP gate: validity -> ignore -> team -> character -> range")
+print("  [FIX-ESP-LIVE] Ignore/team changes immediately destroy or restore ESP eligibility")
+print("  [FIX-ESP-RESPAWN-RACE] CharacterAdded cleanup is generation-safe")
+print("  [FIX-ESP-CHAR-REMOVE] CharacterRemoving closes stale-ESP removal windows")
+print("  [FIX-ESP-TEAM-FAILCLOSED] ESP team-check fails closed on TeamColor errors")
+print("  [PERF-ESP-TEAMCACHE] Team relationship cache removes repeated ESP TeamColor reads")
+print("  [PERF-ESP-LOWLAG] ESP 15 Hz adaptive / layout bookkeeping rate-gated")
+print("  [FIX-ESP-OWNERSHIP] ESP objects use generation/character ownership checks")
+print("  [HARDEN-ESP-INTEGRITY] ESP update path fails closed on ownership/team drift")
+print("  [FIX-F8-VISIBILITY] F8 toggles the full OPSYX UI including Restore/FPS bar")
+print("  [FIX-ASYNC] Delayed tasks invalidated on unload/re-execution")
+print("  [FIX-DRAG]  Active drag-end connections owned and released")
+print("  [FIX-DRAG-SNAP] First-click anchor transition preserves exact panel position")
+print("  [FIX-CAMERA] LOS cache invalidated on CurrentCamera replacement")
+print("  [FIX-DIAG]  Unsupported Drawing.setfpscap path removed")
+print("  [FIX-DIAG]  tick() removed from RNG seed path")
+print("  [3X-PROTECT] Frame exception containment + 3-fault safe-state tripwire")
+print("  [3X-PROTECT] Async trigger pending watchdog + target post-validation")
+print("  [3X-PROTECT] Single-flight cleanup / unload protection")
+print("  No webhook. No data collection. No outbound networking.")
+print("  Default keys: F1 Aim | F2 ESP | F3 Silent | F4 Trigger | Wall Check=Always ON")
+print("  Default globals: F5 Hold | F6 Center | F7 Hide | F8 Master | F9 Panic | F10 Advanced | RMB=Arm")
+print("  F6: Profiles / Diagnostics / Adaptive FPS / Recovery / UI Scale / ESP Range")
+print("  V9.42.7: compact ESP labels / deterministic hold-aim / unified UI alignment / bounded Advanced Suite cards / OPSYX-only protection")
+print("  V9.43.0: exponential velocity smoothing + aim curve + adaptive LOS + ring-log + NEAREST_VISIBLE + LOW_HEALTH blended score")
+print("  [DEF-9.45.4] Passive protection threshold -> OPSYX-owned Safe Mode circuit breaker")
+print("  V9.45.0 improvements:")
+print("    [NEW-9.45-1]  Anti-cheat detection module (passive game-side heuristics)")
+print("    [NEW-9.45-2]  AC event counter + one-shot notify + red status dot")
+print("    [FIX-9.45-A]  Spectator detection: 8s grace period eliminates false positives")
+print("    [FIX-9.45-B]  espCharacterState: dead humanoid not re-cached after nil-eviction")
+print("    [FIX-9.45-C]  importClipboard: AM.md cap corrected to ESP_MAX_RANGE (1000)")
+print("  V9.44.0 improvements:")
+print("    [FIX-9.44-A]  NEAREST_VISIBLE enforces real LOS visibility gate")
+print("    [FIX-9.44-B]  sc() uses task.delay for precise mouse release timing")
+print("    [FIX-9.44-C]  Config import sanitizes all numeric fields with cl()")
+print("    [FIX-9.44-D]  FOV slider clamp applied at S.FV.r write time")
+print("    [FIX-9.44-E]  purgeStalePredCache called every LOSC sweep cycle")
+print("    [FIX-9.44-F]  Dashboard reads live FPS_SHOWN and #PLAYER_LIST")
+print("    [FIX-9.44-G]  Dead Humanoid evicted from HUM_CACHE on Health<=0")
+print("    [FIX-9.44-H]  White-team mode configurable via S.AM.whiteAsEnemy")
+print("    [FIX-9.44-I]  Ignore sort: math.huge dist pushed to list bottom")
+print("    [FIX-9.44-J]  layoutRightDock skips anchor reset for dragged panels")
+print("    [NEW-9.44-1]  S.AM.strength: aim output amplitude 0.0-1.0 slider")
+print("    [NEW-9.44-2]  ST.targetHistory: last 5 targets in dashboard")
+print("    [NEW-9.44-3]  S.ES.chamsFill: solid-color chams via Highlight fill")
+print("    [NEW-9.44-4]  ST.kills: kill streak counter tracked + shown in dash")
+print("    [NEW-9.44-5]  Long-press pill buttons triggers inline key rebind")
+print("    [NEW-9.44-6]  Spectator detection: status dot turns orange + notify")
+print("    [NEW-9.44-7]  S.AM.jitter: smart sub-pixel jitter on aim output")
+print("  V9.41.1 controls: keybinds configurable | defaults F1-F10")
+print("  V9.39: Safe Mode / Watchdog / Profile Backup / Migration / Log Export")
+print("  V9.45.3 defensive compatibility audit:")
+print("    [HARDEN-9.45.3] Safe Mode preserves configured feature states while stopping active output")
+print("    [HARDEN-9.45.3] Focus loss disarms aim/silent/trigger input and invalidates pending actions")
+print("    [HARDEN-9.45.3] Respawn no longer auto-arms mobile trigger state")
+print("    [HARDEN-9.45.3] Recovery bookkeeping is de-bounced to prevent watchdog/recovery storms")
+print("    [PERF-9.45.3] Frame-time EMA adds adaptive ESP backoff on overloaded frames")
+print("    [HARDEN-9.45.3] Passive AC diagnostics use per-signal cooldowns to reduce repeated false positives")
+print("  V9.45.1 stability audit: math.clamp compatibility + auxiliary UI exclusivity + immediate FOV slider input")
+print("  V9.45.1 stability audit: chams/depth synchronization + event-driven ESP cap + ordered layout normalization")
+print("  V9.45.1 stability audit: Advanced Suite card resizers removed to prevent grid overlap")
+print("  [FIX-TRIPLE-1] AC diagnostic timestamp scope corrected + pattern/service caches")
+print("  [FIX-TRIPLE-2] Removed redundant startup/respawn waits and delayed cleanup")
+print("  [PERF-TRIPLE] Advanced Suite consolidated into the existing main frame scheduler")
+print("  [NEW-TRIPLE] Quick actions: ENABLE RELEVANT / HIDE UI / SHOW UI / REINITIALIZE RUNTIME / PERFORMANCE MODE")
+print("  [SCOPE] Diagnostics remain passive, OPSYX-local, and non-evasive.")
+print("  UNLOAD: _G.__V94OPSYX_CL()")
+print(string.rep("=",62))
