@@ -1,14 +1,9 @@
--- ============================================================
--- RE-EXECUTION GUARD 3153
--- If OPSYX is already running, unload the previous instance first
--- so the new execution starts cleanly without duplicate UI/connections.
--- ============================================================
 if _G.__V94OPSYX_LD then
     local oldCleanup = _G.__V94OPSYX_CL
     if type(oldCleanup) == "function" then
         pcall(oldCleanup)
     end
-    -- Cleanup is synchronous/single-flight; do not yield here.
+    -- Cleanup is synchronous/single-flight; do not yield here. 300
     -- Yielding during re-execution only delays the new instance startup and
     -- can create a transient half-initialized state.
 end
@@ -1861,21 +1856,20 @@ local function animateToggleStateVisual(button, enabled, onC, offC)
         ks.Parent = knob
     end
 
-    -- Compact controls use a fixed, reference-style switch so the label area
-    -- stays clean instead of allowing the switch to consume the whole card.
+    -- Keep compact controls visually close to the reference while allowing
+    -- larger Advanced/Feature Center controls to retain their descriptive text.
     local trackW, trackH = 38, 16
     if compact then
-        local bh = 18
-        pcall(function() bh = button.AbsoluteSize.Y > 0 and button.AbsoluteSize.Y or 18 end)
-        trackH = math.floor(cl(bh - 8, 14, 20) + 0.5)
-        trackW = trackH >= 18 and 44 or 40
-        track.Position = UDim2.new(1, -8, 0.5, 0)
+        local bw = 0
+        local bh = 0
+        pcall(function() bw = button.AbsoluteSize.X; bh = button.AbsoluteSize.Y end)
+        trackW = math.floor(cl((bw > 0 and bw - 6 or 38), 28, 48) + 0.5)
+        trackH = math.floor(cl((bh > 0 and bh - 4 or 16), 14, 20) + 0.5)
     else
         local bh = 18
         pcall(function() bh = button.AbsoluteSize.Y > 0 and button.AbsoluteSize.Y or 18 end)
         trackH = math.floor(cl(bh - 6, 14, 20) + 0.5)
         trackW = trackH >= 18 and 38 or 34
-        track.Position = UDim2.new(1, -3, 0.5, 0)
     end
 
     local knobSize = cl(trackH - 4, 8, 14)
@@ -1976,14 +1970,8 @@ end
 local function animateToggleVisual(button, enabled, onC, offC, label)
     if not button or not button.Parent then return false end
     local on = enabled == true
-    local showText = true
-    pcall(function() showText = button:GetAttribute("OPSYXToggleShowText") ~= false end)
-    if showText then
-        local desiredText = (label and (label .. "  •  ")) or ""
-        button.Text = desiredText .. (on and "ON" or "OFF")
-    else
-        button.Text = ""
-    end
+    local desiredText = (label and (label .. "  •  ")) or ""
+    button.Text = desiredText .. (on and "ON" or "OFF")
     local changed = animateToggleStateVisual(button, on, onC, offC)
     if changed and ST and ST.fcStats then
         ST.fcStats.toggles = (ST.fcStats.toggles or 0) + 1
@@ -3629,7 +3617,7 @@ local function cg()
     -- V9.41.1 UI: wide horizontal OPSYX control deck.
     -- The feature pills are arranged left-to-right instead of a vertical list.
     local MENU_W     = 560
-    local MENU_H     = 188
+    local MENU_H     = 168
     local MENU_X_OFF = -14
 
     local main = Instance.new("Frame")
@@ -3692,7 +3680,7 @@ local function cg()
     local subLbl = Instance.new("TextLabel")
     subLbl.Size = UDim2.new(1,-128,0,14); subLbl.Position = UDim2.new(0,33,0,29)
     subLbl.BackgroundTransparency = 1
-    subLbl.Text = "LOCAL SESSION  •  QUICK FEATURES  •  READY"
+    subLbl.Text = "LOCAL SESSION  •  READY"
     subLbl.TextColor3 = C.UI_TEXT_SECONDARY
     subLbl.TextSize = 8; subLbl.Font = Enum.Font.GothamMedium
     subLbl.TextTransparency = 0.05
@@ -3859,58 +3847,55 @@ local function cg()
     -- ============================================================
     local function makeToggle(lbl, xPos, yPos, w, offCol, onCol, getter, setter)
         local row = Instance.new("Frame")
-        row.Size = UDim2.new(0, w, 0, 32)
+        row.Size = UDim2.new(0, w, 0, 42)
         row.Position = UDim2.new(0, xPos, 0, yPos)
         row.BackgroundColor3 = C.UI_PANEL_SOFT
-        row.BackgroundTransparency = 0.02
+        row.BackgroundTransparency = 0.05
         row.BorderSizePixel = 0
         row.Parent = main
         pcall(function()
-            Instance.new("UICorner", row).CornerRadius = UDim.new(0, 8)
+            Instance.new("UICorner", row).CornerRadius = UDim.new(0, 9)
             local stroke = Instance.new("UIStroke", row)
             stroke.Color = Color3.fromRGB(56,76,102)
-            stroke.Transparency = 0.50
+            stroke.Transparency = 0.48
             stroke.Thickness = 1
         end)
 
         row.MouseEnter:Connect(function()
-            C.tween(row, TweenInfo.new(0.10, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {BackgroundColor3=C.UI_HOVER, BackgroundTransparency=0.01})
+            C.tween(row, TweenInfo.new(0.10), {BackgroundColor3=C.UI_HOVER, BackgroundTransparency=0.01})
         end)
         row.MouseLeave:Connect(function()
-            C.tween(row, TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {BackgroundColor3=C.UI_PANEL_SOFT, BackgroundTransparency=0.02})
+            C.tween(row, TweenInfo.new(0.14), {BackgroundColor3=C.UI_PANEL_SOFT, BackgroundTransparency=0.05})
         end)
 
         local lbEl = Instance.new("TextLabel")
-        lbEl.Size = UDim2.new(1, -58, 1, 0)
-        lbEl.Position = UDim2.new(0, 10, 0, 0)
+        lbEl.Size = UDim2.new(1, -12, 0, 18)
+        lbEl.Position = UDim2.new(0, 6, 0, 4)
         lbEl.BackgroundTransparency = 1
         lbEl.Text = lbl
         lbEl.TextColor3 = C.UI_TEXT_PRIMARY
-        lbEl.TextSize = 9
+        lbEl.TextSize = 10
         lbEl.Font = Enum.Font.GothamBold
-        lbEl.TextXAlignment = Enum.TextXAlignment.Left
-        lbEl.TextYAlignment = Enum.TextYAlignment.Center
-        lbEl.TextTruncate = Enum.TextTruncate.AtEnd
+        lbEl.TextXAlignment = Enum.TextXAlignment.Center
         lbEl.Parent = row
 
         local pill = Instance.new("TextButton")
-        pill.Size = UDim2.new(0, 46, 0, 20)
-        pill.Position = UDim2.new(1, -54, 0.5, -10)
-        pill.BackgroundColor3 = Color3.fromRGB(31,39,52)
+        pill.Size = UDim2.new(1, -12, 0, 16)
+        pill.Position = UDim2.new(0, 6, 1, -20)
+        pill.BackgroundColor3 = getter() and onCol or offCol
         pill.BorderSizePixel = 0
-        pill.Text = ""
+        pill.Text = getter() and "ON" or "OFF"
         pill.TextColor3 = Color3.fromRGB(255,255,255)
         pill.TextSize = 8
         pill.Font = Enum.Font.GothamBold
         pill.AutoButtonColor = false
         pill:SetAttribute("OPSYXToggleMode", "compact")
-        pill:SetAttribute("OPSYXToggleShowText", false)
         pill.Parent = row
         pcall(function() Instance.new("UICorner", pill).CornerRadius = UDim.new(1,0) end)
 
         C.PILLS[lbl] = pill
         local function refresh()
-            C.animateToggleStateVisual(pill, getter() == true, onCol, offCol)
+            C.animateToggleVisual(pill, getter() == true, onCol, offCol)
         end
         refresh()
         pill.Activated:Connect(function()
@@ -3923,36 +3908,40 @@ local function cg()
         return pill
     end
 
-    -- Control Deck uses a compact two-row feature grid so labels stay readable
-    -- and every #3-style switch has its own dedicated, consistently aligned area.
-    local CARD_W, CARD_H = 126, 32
-    local CARD_GAP_X, CARD_GAP_Y = 8, 5
-    local ROW1_Y, ROW2_Y = 58, ROW1_Y + CARD_H + CARD_GAP_Y
-    local FOUR_TOTAL_W = (4 * CARD_W) + (3 * CARD_GAP_X)
-    local THREE_TOTAL_W = (3 * CARD_W) + (2 * CARD_GAP_X)
-    local GRID_X4 = math.max(10, math.floor((MENU_W - FOUR_TOTAL_W) * 0.5 + 0.5))
-    local GRID_X3 = math.max(10, math.floor((MENU_W - THREE_TOTAL_W) * 0.5 + 0.5))
+    -- V9.41.1 ALIGNMENT: one centered grid for the entire Control Deck.
+    -- The same left/right margins are used for the feature and action rows so
+    -- the deck stays visually balanced at the current medium size.
+    local CARD_W = 70
+    local CARD_GAP = 3
+    local CARD_Y = 58
+    local CARD_TOTAL_W = (7 * CARD_W) + (6 * CARD_GAP)
+    local CARD_X = math.max(10, math.floor((MENU_W - CARD_TOTAL_W) * 0.5 + 0.5))
 
-    makeToggle("AIMBOT", GRID_X4 + 0*(CARD_W+CARD_GAP_X), ROW1_Y, CARD_W, C.C_RED, C.C_GRN,
+    makeToggle("AIMBOT", CARD_X + 0*(CARD_W+CARD_GAP), CARD_Y, CARD_W, C.C_RED, C.C_GRN,
         function() return C.S.AM.on end,
         function() C.toggleFeatureState("aim") end)
-    makeToggle("ESP", GRID_X4 + 1*(CARD_W+CARD_GAP_X), ROW1_Y, CARD_W, C.C_RED, C.C_GRN,
+
+    makeToggle("ESP", CARD_X + 1*(CARD_W+CARD_GAP), CARD_Y, CARD_W, C.C_RED, C.C_GRN,
         function() return C.S.ES.on end,
         function() C.toggleFeatureState("esp") end)
-    makeToggle("SILENT", GRID_X4 + 2*(CARD_W+CARD_GAP_X), ROW1_Y, CARD_W, C.C_ORG, C.C_GRN,
+
+    makeToggle("SILENT", CARD_X + 2*(CARD_W+CARD_GAP), CARD_Y, CARD_W, C.C_ORG, C.C_GRN,
         function() return C.S.SL.on end,
         function() C.toggleFeatureState("silent") end)
-    makeToggle("TRIGGER", GRID_X4 + 3*(CARD_W+CARD_GAP_X), ROW1_Y, CARD_W, C.C_RED, C.C_GRN,
+
+    makeToggle("TRIGGER", CARD_X + 3*(CARD_W+CARD_GAP), CARD_Y, CARD_W, C.C_RED, C.C_GRN,
         function() return C.S.TR.on end,
         function() C.toggleFeatureState("trigger") end)
 
-    makeToggle("FOV", GRID_X3 + 0*(CARD_W+CARD_GAP_X), ROW2_Y, CARD_W, C.C_BLU, C.C_GRN,
+    makeToggle("FOV", CARD_X + 4*(CARD_W+CARD_GAP), CARD_Y, CARD_W, C.C_BLU, C.C_GRN,
         function() return C.S.FV.on end,
         function() C.toggleFeatureState("fov") end)
-    makeToggle("WALL", GRID_X3 + 1*(CARD_W+CARD_GAP_X), ROW2_Y, CARD_W, C.C_ORG, C.C_GRN,
+
+    makeToggle("WALL", CARD_X + 5*(CARD_W+CARD_GAP), CARD_Y, CARD_W, C.C_ORG, C.C_GRN,
         function() return true end,
         function() C.S.AM.wc=true; C.S.SL.wc=true; C.S.TR.wc=true end)
-    makeToggle("HOLD AIM", GRID_X3 + 2*(CARD_W+CARD_GAP_X), ROW2_Y, CARD_W, C.C_ORG, C.C_GRN,
+
+    makeToggle("HOLD AIM", CARD_X + 6*(CARD_W+CARD_GAP), CARD_Y, CARD_W, C.C_ORG, C.C_GRN,
         function() return holdToAimEnabled end,
         function() C.toggleFeatureState("hold") end)
 
@@ -3961,14 +3950,14 @@ local function cg()
         -- V9.41.1 FINAL ALIGNMENT: action boxes use the same height as the
         -- feature boxes so every clickable box in the Control Deck shares
         -- one consistent vertical rhythm.
-        b.Size = UDim2.new(0,w,0,34)
+        b.Size = UDim2.new(0,w,0,42)
         b.Position = UDim2.new(0,xPos,0,yPos)
         b.BackgroundColor3 = bgCol
         b.BackgroundTransparency = 0.08
         b.BorderSizePixel = 0
         b.Text = lbl2
         b.TextColor3 = txtCol
-        b.TextSize = 8
+        b.TextSize = 9
         b.Font = Enum.Font.GothamBold
         b.AutoButtonColor = false
         b.Parent = main
@@ -3987,7 +3976,7 @@ local function cg()
     -- same visual side margins as the feature-card grid.
     -- Same outer grid width as the seven feature boxes; the action row is
     -- centered beneath it with equal-height boxes and identical side edges.
-    local ACTION_Y, ACTION_W, ACTION_GAP = 132, 126, 5
+    local ACTION_Y, ACTION_W, ACTION_GAP = 105, 126, 5
     local ACTION_TOTAL_W = (4 * ACTION_W) + (3 * ACTION_GAP)
     local ACTION_X = math.max(10, math.floor((MENU_W - ACTION_TOTAL_W) * 0.5 + 0.5))
     local igBtn  = makeTextBtn("IGNORE LIST",        ACTION_X + 0*(ACTION_W+ACTION_GAP), ACTION_Y, ACTION_W, Color3.fromRGB(43,30,66), Color3.fromRGB(214,168,255))
@@ -4007,11 +3996,11 @@ local function cg()
 
     local footer = Instance.new("TextLabel")
     footer.Size = UDim2.new(1,-20,0,18)
-    footer.Position = UDim2.new(0,10,1,-17)
+    footer.Position = UDim2.new(0,10,1,-18)
     footer.BackgroundTransparency = 1
     footer.Text = "CUSTOM KEYS   •   F9 PANIC DEFAULT   •   F10 ADVANCED DEFAULT   •   DRAG TITLE BAR"
     footer.TextColor3 = C.UI_TEXT_MUTED
-    footer.TextSize = 6
+    footer.TextSize = 7
     footer.Font = Enum.Font.GothamMedium
     footer.TextXAlignment = Enum.TextXAlignment.Center
     footer.Parent = main
