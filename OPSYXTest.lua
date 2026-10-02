@@ -3,7 +3,7 @@ if _G.__V94OPSYX_LD then
     if type(oldCleanup) == "function" then
         pcall(oldCleanup)
     end
-    -- Cleanup is synchronous/single-flight; do not yield here. 1
+    -- Cleanup is synchronous/single-flight; do not yield here. 10
     -- Yielding during re-execution only delays the new instance startup and
     -- can create a transient half-initialized state.
 end
@@ -220,42 +220,53 @@ local function animateHover(button, normal, hover, down)
     local function restoreStateVisual()
         local hasToggle = false
         local stateColor
+        local compact = false
         pcall(function()
             local state = button:GetAttribute("OPSYXToggleState")
             hasToggle = type(state) == "boolean"
-            if hasToggle then
+            compact = button:GetAttribute("OPSYXToggleMode") == "compact"
+            if hasToggle and not compact then
                 stateColor = button:GetAttribute(state and "OPSYXToggleOnColor" or "OPSYXToggleOffColor")
             end
         end)
-        return hasToggle, stateColor
+        return hasToggle, stateColor, compact
     end
 
     button.MouseEnter:Connect(function()
         if not button.Parent then return end
-        tween(button, TweenInfo.new(0.10, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-            BackgroundColor3 = hover, BackgroundTransparency = hoverTransparency
-        })
+        local _, _, compact = restoreStateVisual()
+        if compact then
+            tween(button, TweenInfo.new(0.10, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+                BackgroundColor3 = Color3.fromRGB(42, 52, 68), BackgroundTransparency = 0.01
+            })
+        else
+            tween(button, TweenInfo.new(0.10, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+                BackgroundColor3 = hover, BackgroundTransparency = hoverTransparency
+            })
+        end
     end)
     button.MouseLeave:Connect(function()
         if not button.Parent then return end
-        local hasToggle, stateColor = restoreStateVisual()
+        local hasToggle, stateColor, compact = restoreStateVisual()
         tween(button, TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-            BackgroundColor3 = (hasToggle and stateColor) or normal,
-            BackgroundTransparency = hasToggle and 0.06 or normalTransparency
+            BackgroundColor3 = compact and Color3.fromRGB(31, 39, 52) or ((hasToggle and stateColor) or normal),
+            BackgroundTransparency = compact and 0.04 or (hasToggle and 0.06 or normalTransparency)
         })
     end)
     button.MouseButton1Down:Connect(function()
         if not button.Parent then return end
+        local _, _, compact = restoreStateVisual()
         tween(button, TweenInfo.new(0.05, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-            BackgroundColor3 = down or hover, BackgroundTransparency = downTransparency
+            BackgroundColor3 = compact and Color3.fromRGB(24, 31, 42) or (down or hover),
+            BackgroundTransparency = downTransparency
         })
     end)
     button.MouseButton1Up:Connect(function()
         if not button.Parent then return end
-        local hasToggle, stateColor = restoreStateVisual()
+        local hasToggle, stateColor, compact = restoreStateVisual()
         tween(button, TweenInfo.new(0.08, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-            BackgroundColor3 = (hasToggle and stateColor) or hover,
-            BackgroundTransparency = hasToggle and 0.06 or hoverTransparency
+            BackgroundColor3 = compact and Color3.fromRGB(42, 52, 68) or ((hasToggle and stateColor) or hover),
+            BackgroundTransparency = compact and 0.01 or (hasToggle and 0.06 or hoverTransparency)
         })
     end)
 end
@@ -1795,100 +1806,161 @@ local function animateToggleStateVisual(button, enabled, onC, offC)
     local previous = nil
     pcall(function() previous = button:GetAttribute("OPSYXToggleState") end)
 
-    local scale
-    pcall(function()
-        scale = button:FindFirstChild("OPSYXToggleScale")
-        if not scale then
-            scale = Instance.new("UIScale")
-            scale.Name = "OPSYXToggleScale"
-            scale.Scale = 1
-            scale.Parent = button
-        end
-    end)
-
-    local stroke
-    pcall(function()
-        stroke = button:FindFirstChild("OPSYXAdvancedStroke") or button:FindFirstChild("OPSYXToggleStroke")
-        if not stroke then
-            stroke = Instance.new("UIStroke")
-            stroke.Name = "OPSYXToggleStroke"
-            stroke.Thickness = 1.15
-            stroke.Transparency = 0.55
-            stroke.Parent = button
-        end
-        stroke.Color = desiredColor
-    end)
-
-    local dot
-    pcall(function()
-        dot = button:FindFirstChild("OPSYXStateDot") or button:FindFirstChild("OPSYXToggleDot")
-        if not dot then
-            dot = Instance.new("Frame")
-            dot.Name = "OPSYXToggleDot"
-            dot.Size = UDim2.fromOffset(6, 6)
-            dot.AnchorPoint = Vector2.new(1, 0.5)
-            dot.Position = UDim2.new(1, -6, 0.5, 0)
-            dot.BorderSizePixel = 0
-            dot.ZIndex = (tonumber(button.ZIndex) or 1) + 1
-            dot.Parent = button
-            local corner = Instance.new("UICorner")
-            corner.CornerRadius = UDim.new(1, 0)
-            corner.Parent = dot
-        end
-        dot.Visible = true
-        dot.BackgroundColor3 = desiredColor
-    end)
+    local compact = false
+    pcall(function() compact = button:GetAttribute("OPSYXToggleMode") == "compact" end)
 
     button.AutoButtonColor = false
-    if previous == on then
-        button.BackgroundColor3 = desiredColor
-        button.BackgroundTransparency = on and 0.02 or 0.06
-        if stroke then
-            stroke.Color = desiredColor
-            stroke.Transparency = on and 0.18 or 0.55
-        end
-        if dot then
-            dot.BackgroundColor3 = desiredColor
-            dot.BackgroundTransparency = on and 0.02 or 0.28
-            dot.Size = on and UDim2.fromOffset(8, 8) or UDim2.fromOffset(5, 5)
-        end
-        if scale then scale.Scale = 1 end
-        return false
-    end
-
     pcall(function()
         button:SetAttribute("OPSYXToggleState", on)
         button:SetAttribute("OPSYXToggleOnColor", onC)
         button:SetAttribute("OPSYXToggleOffColor", offC)
     end)
-    tween(button, TweenInfo.new(0.14, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
-        BackgroundColor3 = desiredColor,
-        BackgroundTransparency = on and 0.02 or 0.06,
-    })
 
-    if stroke then
-        stroke.Transparency = 0.05
-        tween(stroke, TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-            Color = desiredColor,
-            Transparency = on and 0.18 or 0.55,
-        })
+    -- #3-style switch: a slim rounded track with a circular knob that slides
+    -- left/right.  The feature state is represented by position and accent,
+    -- while the existing button text/label remains intact for accessibility.
+    local track = button:FindFirstChild("OPSYXToggleTrack")
+    if not track then
+        track = Instance.new("Frame")
+        track.Name = "OPSYXToggleTrack"
+        track.AnchorPoint = Vector2.new(1, 0.5)
+        track.Position = UDim2.new(1, -3, 0.5, 0)
+        track.BorderSizePixel = 0
+        track.ZIndex = (tonumber(button.ZIndex) or 1) + 1
+        track.Parent = button
+        local tc = Instance.new("UICorner")
+        tc.CornerRadius = UDim.new(1, 0)
+        tc.Parent = track
+        local ts = Instance.new("UIStroke")
+        ts.Name = "TrackStroke"
+        ts.Thickness = 1
+        ts.Parent = track
     end
 
-    if dot then
-        tween(dot, TweenInfo.new(0.16, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+    local trackStroke = track:FindFirstChild("TrackStroke")
+    local knob = track:FindFirstChild("OPSYXToggleKnob")
+    if not knob then
+        knob = Instance.new("Frame")
+        knob.Name = "OPSYXToggleKnob"
+        knob.AnchorPoint = Vector2.new(0, 0.5)
+        knob.BorderSizePixel = 0
+        knob.ZIndex = track.ZIndex + 1
+        knob.Parent = track
+        local kc = Instance.new("UICorner")
+        kc.CornerRadius = UDim.new(1, 0)
+        kc.Parent = knob
+        local ks = Instance.new("UIStroke")
+        ks.Name = "KnobStroke"
+        ks.Thickness = 1
+        ks.Transparency = 0.15
+        ks.Parent = knob
+    end
+
+    -- Keep compact controls visually close to the reference while allowing
+    -- larger Advanced/Feature Center controls to retain their descriptive text.
+    local trackW, trackH = 38, 16
+    if compact then
+        local bw = 0
+        local bh = 0
+        pcall(function() bw = button.AbsoluteSize.X; bh = button.AbsoluteSize.Y end)
+        trackW = math.floor(cl((bw > 0 and bw - 6 or 38), 28, 48) + 0.5)
+        trackH = math.floor(cl((bh > 0 and bh - 4 or 16), 14, 20) + 0.5)
+    else
+        local bh = 18
+        pcall(function() bh = button.AbsoluteSize.Y > 0 and button.AbsoluteSize.Y or 18 end)
+        trackH = math.floor(cl(bh - 6, 14, 20) + 0.5)
+        trackW = trackH >= 18 and 38 or 34
+    end
+
+    local knobSize = cl(trackH - 4, 8, 14)
+    local leftX = 3
+    local rightX = math.max(leftX, trackW - knobSize - 3)
+    track.Size = UDim2.fromOffset(trackW, trackH)
+    local targetPos = UDim2.fromOffset(on and rightX or leftX, trackH * 0.5)
+    knob.Size = UDim2.fromOffset(knobSize, knobSize)
+
+    local trackOff = offC
+    local trackOn = onC
+    local baseTrack = on and Color3.fromRGB(
+        math.floor((trackOn.R * 255) * 0.50 + 28),
+        math.floor((trackOn.G * 255) * 0.50 + 28),
+        math.floor((trackOn.B * 255) * 0.50 + 28)
+    ) or Color3.fromRGB(35, 43, 56)
+    local strokeColor = on and trackOn or trackOff
+
+    if previous == on then
+        track.BackgroundColor3 = baseTrack
+        track.BackgroundTransparency = on and 0.04 or 0.16
+        if trackStroke then
+            trackStroke.Color = strokeColor
+            trackStroke.Transparency = on and 0.12 or 0.64
+        end
+        knob.Position = targetPos
+        knob.BackgroundColor3 = on and Color3.fromRGB(245, 249, 255) or Color3.fromRGB(177, 188, 203)
+        knob.BackgroundTransparency = on and 0.02 or 0.12
+        local ks = knob:FindFirstChild("KnobStroke")
+        if ks then
+            ks.Color = on and onC or Color3.fromRGB(92, 104, 120)
+        end
+        if compact then
+            button.BackgroundColor3 = Color3.fromRGB(31, 39, 52)
+            button.BackgroundTransparency = 0.04
+        end
+        return false
+    end
+
+    -- Keep the original button's semantic state color, but make the visible
+    -- switch the primary ON/OFF indicator.
+    if compact then
+        tween(button, TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+            BackgroundColor3 = Color3.fromRGB(31, 39, 52),
+            BackgroundTransparency = 0.04,
+        })
+    else
+        tween(button, TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
             BackgroundColor3 = desiredColor,
-            BackgroundTransparency = on and 0.02 or 0.28,
-            Size = on and UDim2.fromOffset(8, 8) or UDim2.fromOffset(5, 5),
+            BackgroundTransparency = on and 0.02 or 0.06,
         })
     end
 
+    tween(track, TweenInfo.new(0.18, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+        BackgroundColor3 = baseTrack,
+        BackgroundTransparency = on and 0.04 or 0.16,
+    })
+    if trackStroke then
+        tween(trackStroke, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+            Color = strokeColor,
+            Transparency = on and 0.12 or 0.64,
+        })
+    end
+    tween(knob, TweenInfo.new(0.20, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+        Position = targetPos,
+        BackgroundColor3 = on and Color3.fromRGB(245, 249, 255) or Color3.fromRGB(177, 188, 203),
+        BackgroundTransparency = on and 0.02 or 0.12,
+    })
+    local knobStroke = knob:FindFirstChild("KnobStroke")
+    if knobStroke then
+        tween(knobStroke, TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+            Color = on and onC or Color3.fromRGB(92, 104, 120),
+        })
+    end
+
+    -- Tiny press-style scale feedback without any persistent animation loop.
+    local scale = button:FindFirstChild("OPSYXToggleScale")
+    if not scale then
+        pcall(function()
+            scale = Instance.new("UIScale")
+            scale.Name = "OPSYXToggleScale"
+            scale.Scale = 1
+            scale.Parent = button
+        end)
+    end
     if scale then
-        local bump = on and 1.035 or 0.975
-        tween(scale, TweenInfo.new(0.09, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Scale = bump})
+        tween(scale, TweenInfo.new(0.07, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Scale = on and 1.018 or 0.988})
         tsp(function()
             tw(0.07)
             if ST and ST.ld and button.Parent then
-                tween(scale, TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Scale = 1})
+                tween(scale, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Scale = 1})
             end
         end)
     end
@@ -3817,6 +3889,7 @@ local function cg()
         pill.TextSize = 8
         pill.Font = Enum.Font.GothamBold
         pill.AutoButtonColor = false
+        pill:SetAttribute("OPSYXToggleMode", "compact")
         pill.Parent = row
         pcall(function() Instance.new("UICorner", pill).CornerRadius = UDim.new(1,0) end)
 
@@ -4215,7 +4288,9 @@ local function cg()
     tcBtn.BackgroundTransparency = 0.2; tcBtn.BorderSizePixel = 0
     tcBtn.Text = C.S.AM.tc and "ON" or "OFF"
     tcBtn.TextColor3 = Color3.fromRGB(255,255,255)
-    tcBtn.TextSize = 12; tcBtn.Font = Enum.Font.GothamBold; tcBtn.Parent = setP
+    tcBtn.TextSize = 12; tcBtn.Font = Enum.Font.GothamBold
+    tcBtn:SetAttribute("OPSYXToggleMode", "compact")
+    tcBtn.Parent = setP
     pcall(function() Instance.new("UICorner",tcBtn).CornerRadius = UDim.new(0,5) end)
     C.animateHover(tcBtn, C.S.AM.tc and Color3.fromRGB(30,82,55) or Color3.fromRGB(75,35,43),
         Color3.fromRGB(45,105,75), Color3.fromRGB(70,35,44))
@@ -5616,7 +5691,9 @@ if MOB then
             pill.BackgroundColor3 = getter() and onC or offC; pill.BorderSizePixel = 0
             pill.Text = getter() and "ON" or "OFF"
             pill.TextColor3 = Color3.fromRGB(255,255,255)
-            pill.TextSize = 11; pill.Font = Enum.Font.GothamBold; pill.Parent = row
+            pill.TextSize = 11; pill.Font = Enum.Font.GothamBold
+            pill:SetAttribute("OPSYXToggleMode", "compact")
+            pill.Parent = row
             pcall(function() Instance.new("UICorner",pill).CornerRadius = UDim.new(1,0) end)
 
             GUI.mobilePills = GUI.mobilePills or {}
@@ -5782,6 +5859,7 @@ local function buildFeatureCenterCleanControls()
 
         GUI.featureCenterToggles = GUI.featureCenterToggles or {}
         local function updateBoolButton(b, label, key)
+            pcall(function() b:SetAttribute("OPSYXToggleMode", "inline") end)
             local on = S.ES[key] == true
             GUI.featureCenterToggles[key] = b
             b.Text = label .. "  •  " .. (on and "ON" or "OFF")
@@ -8415,6 +8493,7 @@ ST.setupV40 = function()
 
         local function setAdvButton(b, textValue, enabled)
             if not b or not b.Parent then return end
+            pcall(function() b:SetAttribute("OPSYXToggleMode", "inline") end)
             b.Text = textValue or ""
             if enabled == nil then
                 pcall(b.SetAttribute, b, "OPSYXToggleState", nil)
@@ -10175,3 +10254,4 @@ function _G.__V94OPSYX_CL()
     v39Log("CLEANUP", "complete")
     _G.__V94OPSYX_LD = nil; _G.__V94OPSYX_CL = nil
 end
+print("OPSYX Loaded")
