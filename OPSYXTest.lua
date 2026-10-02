@@ -1,14 +1,9 @@
--- ============================================================
--- RE-EXECUTION GUARD 30
--- If OPSYX is already running, unload the previous instance first
--- so the new execution starts cleanly without duplicate UI/connections.
--- ============================================================
 if _G.__V94OPSYX_LD then
     local oldCleanup = _G.__V94OPSYX_CL
     if type(oldCleanup) == "function" then
         pcall(oldCleanup)
     end
-    -- Cleanup is synchronous/single-flight; do not yield here.
+    -- Cleanup is synchronous/single-flight; do not yield here. 1000
     -- Yielding during re-execution only delays the new instance startup and
     -- can create a transient half-initialized state.
 end
