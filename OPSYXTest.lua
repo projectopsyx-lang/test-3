@@ -1,6 +1,6 @@
 -- ============================================================
--- RE-EXECUTION GUARD 250
--- If OPSYX is already running, unload the previous instance first 100
+-- RE-EXECUTION GUARD 12
+-- If OPSYX is already running, unload the previous instance first
 -- so the new execution starts cleanly without duplicate UI/connections.
 -- ============================================================
 if _G.__V94OPSYX_LD then
