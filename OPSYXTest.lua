@@ -1,14 +1,9 @@
--- ============================================================
--- RE-EXECUTION GUARD 25
--- If OPSYX is already running, unload the previous instance first
--- so the new execution starts cleanly without duplicate UI/connections.
--- ============================================================
 if _G.__V94OPSYX_LD then
     local oldCleanup = _G.__V94OPSYX_CL
     if type(oldCleanup) == "function" then
         pcall(oldCleanup)
     end
-    -- Cleanup is synchronous/single-flight; do not yield here.
+    -- Cleanup is synchronous/single-flight; do not yield here. 1
     -- Yielding during re-execution only delays the new instance startup and
     -- can create a transient half-initialized state.
 end
@@ -218,19 +213,49 @@ end
 
 local function animateHover(button, normal, hover, down)
     if not button then return end
+    local normalTransparency = 0.20
+    local hoverTransparency = 0.08
+    local downTransparency = 0.02
+
+    local function restoreStateVisual()
+        local hasToggle = false
+        local stateColor
+        pcall(function()
+            local state = button:GetAttribute("OPSYXToggleState")
+            hasToggle = type(state) == "boolean"
+            if hasToggle then
+                stateColor = button:GetAttribute(state and "OPSYXToggleOnColor" or "OPSYXToggleOffColor")
+            end
+        end)
+        return hasToggle, stateColor
+    end
+
     button.MouseEnter:Connect(function()
-        tween(button, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-            BackgroundColor3 = hover, BackgroundTransparency = 0.08
+        if not button.Parent then return end
+        tween(button, TweenInfo.new(0.10, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+            BackgroundColor3 = hover, BackgroundTransparency = hoverTransparency
         })
     end)
     button.MouseLeave:Connect(function()
-        tween(button, TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-            BackgroundColor3 = normal, BackgroundTransparency = 0.20
+        if not button.Parent then return end
+        local hasToggle, stateColor = restoreStateVisual()
+        tween(button, TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+            BackgroundColor3 = (hasToggle and stateColor) or normal,
+            BackgroundTransparency = hasToggle and 0.06 or normalTransparency
         })
     end)
     button.MouseButton1Down:Connect(function()
+        if not button.Parent then return end
         tween(button, TweenInfo.new(0.05, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-            BackgroundColor3 = down or hover, BackgroundTransparency = 0.02
+            BackgroundColor3 = down or hover, BackgroundTransparency = downTransparency
+        })
+    end)
+    button.MouseButton1Up:Connect(function()
+        if not button.Parent then return end
+        local hasToggle, stateColor = restoreStateVisual()
+        tween(button, TweenInfo.new(0.08, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+            BackgroundColor3 = (hasToggle and stateColor) or hover,
+            BackgroundTransparency = hasToggle and 0.06 or hoverTransparency
         })
     end)
 end
@@ -458,6 +483,7 @@ local ST = {
         cleanupState="IDLE",
         protectLastMs=0, protectSlow=0, protectFaults=0, protectRepairs=0,
         protectChecks=0, protectStatus="READY", protectLast="",
+        startupReady=false, startupReadyT=0,
     },
 }
 
@@ -1760,13 +1786,12 @@ end
 -- ============================================================
 -- GUI HELPERS
 -- ============================================================
-local function animateToggleVisual(button, enabled, onC, offC, label)
+-- Shared visual state layer for boolean toggles. It never changes feature
+-- state itself; callers continue to own the existing feature/config logic.
+local function animateToggleStateVisual(button, enabled, onC, offC)
     if not button or not button.Parent then return false end
     local on = enabled == true
     local desiredColor = on and onC or offC
-    local desiredText = (label and (label .. "  •  ")) or ""
-    desiredText = desiredText .. (on and "ON" or "OFF")
-
     local previous = nil
     pcall(function() previous = button:GetAttribute("OPSYXToggleState") end)
 
@@ -1781,8 +1806,9 @@ local function animateToggleVisual(button, enabled, onC, offC, label)
         end
     end)
 
+    local stroke
     pcall(function()
-        local stroke = button:FindFirstChild("OPSYXToggleStroke")
+        stroke = button:FindFirstChild("OPSYXAdvancedStroke") or button:FindFirstChild("OPSYXToggleStroke")
         if not stroke then
             stroke = Instance.new("UIStroke")
             stroke.Name = "OPSYXToggleStroke"
@@ -1793,48 +1819,92 @@ local function animateToggleVisual(button, enabled, onC, offC, label)
         stroke.Color = desiredColor
     end)
 
-    button.Text = desiredText
-    button.AutoButtonColor = false
+    local dot
+    pcall(function()
+        dot = button:FindFirstChild("OPSYXStateDot") or button:FindFirstChild("OPSYXToggleDot")
+        if not dot then
+            dot = Instance.new("Frame")
+            dot.Name = "OPSYXToggleDot"
+            dot.Size = UDim2.fromOffset(6, 6)
+            dot.AnchorPoint = Vector2.new(1, 0.5)
+            dot.Position = UDim2.new(1, -6, 0.5, 0)
+            dot.BorderSizePixel = 0
+            dot.ZIndex = (tonumber(button.ZIndex) or 1) + 1
+            dot.Parent = button
+            local corner = Instance.new("UICorner")
+            corner.CornerRadius = UDim.new(1, 0)
+            corner.Parent = dot
+        end
+        dot.Visible = true
+        dot.BackgroundColor3 = desiredColor
+    end)
 
-    -- The state attribute prevents the normal 0.15s refresh loop from replaying
-    -- the animation continuously. It only animates when the real state changes.
+    button.AutoButtonColor = false
     if previous == on then
         button.BackgroundColor3 = desiredColor
+        button.BackgroundTransparency = on and 0.02 or 0.06
+        if stroke then
+            stroke.Color = desiredColor
+            stroke.Transparency = on and 0.18 or 0.55
+        end
+        if dot then
+            dot.BackgroundColor3 = desiredColor
+            dot.BackgroundTransparency = on and 0.02 or 0.28
+            dot.Size = on and UDim2.fromOffset(8, 8) or UDim2.fromOffset(5, 5)
+        end
         if scale then scale.Scale = 1 end
         return false
     end
 
-    pcall(function() button:SetAttribute("OPSYXToggleState", on) end)
-    if ST and ST.fcStats then ST.fcStats.toggles=(ST.fcStats.toggles or 0)+1 end
-
-    -- 3X visual feedback: color tween + overshoot + settle + text emphasis.
-    local targetScale = on and 1.075 or 0.94
     pcall(function()
-        tween(button, TweenInfo.new(0.14, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
-            BackgroundColor3 = desiredColor,
-            BackgroundTransparency = on and 0.0 or 0.06,
-        })
+        button:SetAttribute("OPSYXToggleState", on)
+        button:SetAttribute("OPSYXToggleOnColor", onC)
+        button:SetAttribute("OPSYXToggleOffColor", offC)
     end)
+    tween(button, TweenInfo.new(0.14, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+        BackgroundColor3 = desiredColor,
+        BackgroundTransparency = on and 0.02 or 0.06,
+    })
+
+    if stroke then
+        stroke.Transparency = 0.05
+        tween(stroke, TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+            Color = desiredColor,
+            Transparency = on and 0.18 or 0.55,
+        })
+    end
+
+    if dot then
+        tween(dot, TweenInfo.new(0.16, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+            BackgroundColor3 = desiredColor,
+            BackgroundTransparency = on and 0.02 or 0.28,
+            Size = on and UDim2.fromOffset(8, 8) or UDim2.fromOffset(5, 5),
+        })
+    end
+
     if scale then
-        pcall(function()
-            tween(scale, TweenInfo.new(0.11, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Scale = targetScale})
-            tsp(function()
-                tw(0.10)
-                if not ST.ld then return end
-                tween(scale, TweenInfo.new(0.18, Enum.EasingStyle.Elastic, Enum.EasingDirection.Out), {Scale = 1})
-            end)
+        local bump = on and 1.035 or 0.975
+        tween(scale, TweenInfo.new(0.09, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Scale = bump})
+        tsp(function()
+            tw(0.07)
+            if ST and ST.ld and button.Parent then
+                tween(scale, TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Scale = 1})
+            end
         end)
     end
-    pcall(function()
-        local stroke = button:FindFirstChild("OPSYXToggleStroke")
-        if stroke then
-            stroke.Transparency = 0.05
-            tween(stroke, TweenInfo.new(0.28, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-                Transparency = 0.35, Thickness = 1.25
-            })
-        end
-    end)
     return true
+end
+
+local function animateToggleVisual(button, enabled, onC, offC, label)
+    if not button or not button.Parent then return false end
+    local on = enabled == true
+    local desiredText = (label and (label .. "  •  ")) or ""
+    button.Text = desiredText .. (on and "ON" or "OFF")
+    local changed = animateToggleStateVisual(button, on, onC, offC)
+    if changed and ST and ST.fcStats then
+        ST.fcStats.toggles = (ST.fcStats.toggles or 0) + 1
+    end
+    return changed
 end
 
 local function updBtn(name, state, onC, offC)
@@ -1851,6 +1921,55 @@ local function refreshMainFeaturePills()
     updBtn("FOV", S.FV.on, C_GRN, C_BLU)
     updBtn("WALL", true, C_GRN, C_ORG)
     updBtn("HOLD AIM", holdToAimEnabled, C_GRN, C_ORG)
+
+    -- Keep secondary UI surfaces visually synchronized when state changes
+    -- originate from another panel, hotkey, profile load, or recovery action.
+    local mobile = GUI.mobilePills
+    if mobile then
+        local mobileDefs = {
+            AIMBOT={state=S.AM.on, on=C_GRN, off=C_RED},
+            ESP={state=S.ES.on, on=C_GRN, off=C_RED},
+            SILENT={state=S.SL.on, on=C_GRN, off=C_ORG},
+            TRIGGER={state=S.TR.on, on=C_GRN, off=C_RED},
+            FOV={state=S.FV.on, on=C_GRN, off=C_BLU},
+            ["HOLD AIM"]={state=holdToAimEnabled, on=C_GRN, off=C_ORG},
+        }
+        for label, def in pairs(mobileDefs) do
+            local pill = mobile[label]
+            if pill and pill.Parent then
+                pill.Text = def.state and "ON" or "OFF"
+                animateToggleStateVisual(pill, def.state == true, def.on, def.off)
+            end
+        end
+    end
+
+    local fc = GUI.featureCenterToggles
+    if fc then
+        local fcDefs = {
+            name="NAME", health="HEALTH", distance="DISTANCE",
+            highlight="HIGHLIGHT", visibility="VISIBILITY",
+        }
+        for key, label in pairs(fcDefs) do
+            local b = fc[key]
+            if b and b.Parent then
+                local state = S.ES[key] == true
+                b.Text = label .. "  •  " .. (state and "ON" or "OFF")
+                animateToggleStateVisual(b, state, C_GRN, C_RED)
+            end
+        end
+    end
+
+    if GUI.mobileThirdPerson and GUI.mobileThirdPerson.Parent then
+        local tp = S.TP.on == true
+        GUI.mobileThirdPerson.Text = tp and "ON" or "OFF"
+        animateToggleStateVisual(GUI.mobileThirdPerson, tp, C_GRN, C_BLU)
+    end
+
+    if GUI.teamCheckButton and GUI.teamCheckButton.Parent then
+        local teamCheck = S.AM.tc == true
+        GUI.teamCheckButton.Text = teamCheck and "ON" or "OFF"
+        animateToggleStateVisual(GUI.teamCheckButton, teamCheck, C_GRN, C_RED)
+    end
 end
 
 function ST.__closeAuxPanels(except)
@@ -3286,6 +3405,7 @@ ST.__CGCTX = {
     refreshAllESPFilterState = refreshAllESPFilterState,
     renameESP = renameESP,
     animateToggleVisual = animateToggleVisual,
+    animateToggleStateVisual = animateToggleStateVisual,
     updBtn = updBtn,
     refreshMainFeaturePills = refreshMainFeaturePills,
     setMenuVisible = setMenuVisible,
@@ -3491,6 +3611,7 @@ local function cg()
     subLbl.Text = "LOCAL SESSION  •  READY"
     subLbl.TextColor3 = C.UI_TEXT_SECONDARY
     subLbl.TextSize = 8; subLbl.Font = Enum.Font.GothamMedium
+    subLbl.TextTransparency = 0.05
     subLbl.TextXAlignment = Enum.TextXAlignment.Left
     subLbl.Parent = main
     C.GUI.statusLabel = subLbl
@@ -3701,10 +3822,9 @@ local function cg()
 
         C.PILLS[lbl] = pill
         local function refresh()
-            local ns = getter()
-            pill.BackgroundColor3 = ns and onCol or offCol
-            pill.Text = ns and "ON" or "OFF"
+            C.animateToggleVisual(pill, getter() == true, onCol, offCol)
         end
+        refresh()
         pill.Activated:Connect(function()
             local ok, err = pcall(setter)
             refresh()
@@ -4097,11 +4217,15 @@ local function cg()
     tcBtn.TextColor3 = Color3.fromRGB(255,255,255)
     tcBtn.TextSize = 12; tcBtn.Font = Enum.Font.GothamBold; tcBtn.Parent = setP
     pcall(function() Instance.new("UICorner",tcBtn).CornerRadius = UDim.new(0,5) end)
-    tcBtn.MouseButton1Down:Connect(function()
+    C.animateHover(tcBtn, C.S.AM.tc and Color3.fromRGB(30,82,55) or Color3.fromRGB(75,35,43),
+        Color3.fromRGB(45,105,75), Color3.fromRGB(70,35,44))
+    C.GUI.teamCheckButton = tcBtn
+    C.animateToggleStateVisual(tcBtn, C.S.AM.tc, C_GRN, C_RED)
+    tcBtn.Activated:Connect(function()
         local nv = not C.S.AM.tc
         C.S.AM.tc=nv; C.S.SL.tc=nv; C.S.TR.tc=nv; C.S.ES.tc=nv
-        tcBtn.BackgroundColor3 = nv and Color3.fromRGB(30,82,55) or Color3.fromRGB(75,35,43)
         tcBtn.Text = nv and "ON" or "OFF"
+        C.animateToggleStateVisual(tcBtn, nv, C_GRN, C_RED)
         -- [FIX-ESP-FILTER] Team-check changes invalidate the ESP set immediately.
         if type(C.refreshAllESPFilterState) == "function" then
             pcall(C.refreshAllESPFilterState)
@@ -4265,13 +4389,14 @@ local function cg()
     fcClose.ZIndex = 62
     fcClose.Parent = FEATURE_CENTER
     pcall(function() Instance.new("UICorner",fcClose).CornerRadius = UDim.new(0,5) end)
+    C.animateHover(fcClose, Color3.fromRGB(100,30,30), Color3.fromRGB(135,40,44), Color3.fromRGB(75,24,28))
     fcClose.Activated:Connect(function()
         FEATURE_CENTER.Visible = false
         pcall(C.layoutRightDock)
     end)
 
     local fcStatus = Instance.new("TextLabel")
-    fcStatus.Size = UDim2.new(1,-20,0,70)
+    fcStatus.Size = UDim2.new(1,-20,0,88)
     fcStatus.Position = UDim2.new(0,10,0,34)
     fcStatus.BackgroundColor3 = Color3.fromRGB(10,12,22)
     fcStatus.BackgroundTransparency = 0.18
@@ -5000,7 +5125,7 @@ local function cg()
     local FC_AUTO_COLUMNS = 3
     local FC_AUTO_GAP = 6
     -- V9.41.1: one deterministic, readable 3-column grid.
-    local FC_GRID_X, FC_GRID_Y = 14, 112
+    local FC_GRID_X, FC_GRID_Y = 14, 126
     local FC_GRID_W, FC_GRID_H, FC_GRID_GAP = 176, 28, FC_AUTO_GAP
     local function fcButton(text, x, y, w, callback)
         -- Ignore legacy hand-written coordinates and place every control into
@@ -5494,11 +5619,17 @@ if MOB then
             pill.TextSize = 11; pill.Font = Enum.Font.GothamBold; pill.Parent = row
             pcall(function() Instance.new("UICorner",pill).CornerRadius = UDim.new(1,0) end)
 
-            local function refresh()
-                local ns = getter()
-                pill.BackgroundColor3 = ns and onC or offC
-                pill.Text = ns and "ON" or "OFF"
+            GUI.mobilePills = GUI.mobilePills or {}
+            GUI.mobilePills[lbl] = pill
+            if lbl == "THIRD PERSON" then
+                GUI.mobileThirdPerson = pill
             end
+            local function refresh()
+                local ns = getter() == true
+                pill.Text = ns and "ON" or "OFF"
+                animateToggleStateVisual(pill, ns, onC, offC)
+            end
+            refresh()
             pill.Activated:Connect(function()
                 local ok, err = pcall(setter)
                 refresh()
@@ -5649,10 +5780,12 @@ local function buildFeatureCenterCleanControls()
             return b
         end
 
+        GUI.featureCenterToggles = GUI.featureCenterToggles or {}
         local function updateBoolButton(b, label, key)
             local on = S.ES[key] == true
+            GUI.featureCenterToggles[key] = b
             b.Text = label .. "  •  " .. (on and "ON" or "OFF")
-            b.BackgroundColor3 = on and Color3.fromRGB(24,78,52) or Color3.fromRGB(42,35,43)
+            animateToggleStateVisual(b, on, C_GRN, C_RED)
         end
 
         local nameBtn = addCleanButton(0,0,"NAME",function() S.ES.name=not S.ES.name; updateBoolButton(nameBtn,"NAME","name") end)
@@ -6287,6 +6420,7 @@ end
 
 function ST.__opsyxProtectionIntegrityTick()
     if type(ST) ~= "table" or not ST.ld then return end
+    if ST.v39.startupReady ~= true then return end
     if type(S) ~= "table" or type(S.V39) ~= "table" then
         if type(ST.OPSYX_PROTECT) == "table" then
             ST.OPSYX_PROTECT.last = "STATE_SCHEMA_DRIFT"
@@ -7579,6 +7713,7 @@ ST.setupV40 = function()
         close.ZIndex = 1550
         close.Parent = suite
         pcall(function() Instance.new("UICorner", close).CornerRadius = UDim.new(0, 6) end)
+        animateHover(close, Color3.fromRGB(86,30,42), Color3.fromRGB(118,42,56), Color3.fromRGB(68,24,34))
 
         local scroll = Instance.new("ScrollingFrame")
         scroll.Name = "Content"
@@ -7923,6 +8058,7 @@ ST.setupV40 = function()
                 minStroke.Thickness = 1
                 minStroke.Transparency = 0.35
             end)
+            animateHover(minimize, UI_PANEL_INPUT, UI_HOVER, UI_PANEL_INPUT)
 
             local divider = Instance.new("Frame")
             divider.Size = UDim2.new(1, 0, 0, 1)
@@ -8286,23 +8422,14 @@ ST.setupV40 = function()
                 b.TextColor3 = UI_TEXT_PRIMARY
             else
                 local on = enabled == true
-                pcall(b.SetAttribute, b, "OPSYXToggleState", on)
-                b.BackgroundColor3 = on and UI_ACTIVE or UI_PANEL_INPUT
-                b.BackgroundTransparency = on and 0.02 or 0.04
+                animateToggleStateVisual(b, on, UI_ACTIVE, UI_PANEL_INPUT)
                 b.TextColor3 = on and UI_TEXT_PRIMARY or UI_TEXT_SECONDARY
-                local dot = b:FindFirstChild("OPSYXStateDot")
+                local dot = b:FindFirstChild("OPSYXStateDot") or b:FindFirstChild("OPSYXToggleDot")
                 if dot then
                     dot.Visible = true
                     dot.BackgroundColor3 = on and UI_SUCCESS or UI_DANGER
-                    dot.BackgroundTransparency = on and 0.02 or 0.18
+                    dot.BackgroundTransparency = on and 0.02 or 0.24
                 end
-                pcall(function()
-                    local stroke = b:FindFirstChild("OPSYXAdvancedStroke")
-                    if stroke then
-                        stroke.Color = on and UI_ACTIVE or UI_BORDER
-                        stroke.Transparency = on and 0.18 or 0.55
-                    end
-                end)
                 return
             end
             local dot = b:FindFirstChild("OPSYXStateDot")
@@ -9937,6 +10064,12 @@ ST.__raiseOpsyxBox(GUI.featureCenter, 1300)
 ST.__raiseOpsyxBox(GUI.advancedSuite, 1400)
 ST.__raiseOpsyxBox(GUI.restoreBar, 1500)
 
+-- Protection begins only after the complete startup graph is assembled.
+-- This prevents integrity polling from racing GUI/event construction while
+-- preserving the same protection logic and its later cleanup path.
+ST.v39.startupReady = true
+ST.v39.startupReadyT = os.clock()
+
 pcall(function()
     if GUI.sg then
         GUI.sg.ZIndexBehavior = Enum.ZIndexBehavior.Global
@@ -10042,4 +10175,3 @@ function _G.__V94OPSYX_CL()
     v39Log("CLEANUP", "complete")
     _G.__V94OPSYX_LD = nil; _G.__V94OPSYX_CL = nil
 end
-print("OPSYX Loaded")
