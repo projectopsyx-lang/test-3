@@ -1,9 +1,14 @@
+-- ============================================================
+-- RE-EXECUTION GUARD 25
+-- If OPSYX is already running, unload the previous instance first
+-- so the new execution starts cleanly without duplicate UI/connections.
+-- ============================================================
 if _G.__V94OPSYX_LD then
     local oldCleanup = _G.__V94OPSYX_CL
     if type(oldCleanup) == "function" then
         pcall(oldCleanup)
     end
-    -- Cleanup is synchronous/single-flight; do not yield here. 1000
+    -- Cleanup is synchronous/single-flight; do not yield here.
     -- Yielding during re-execution only delays the new instance startup and
     -- can create a transient half-initialized state.
 end
@@ -516,8 +521,6 @@ local function v39Recovery(name)
 end
 
 local PILLS = {}
-local MOBILE_PILLS = {}
-local CLEAN_TOGGLE_BUTTONS = {}
 local CONNS = {}
 local function hook(c) if c then CONNS[#CONNS+1] = c end end
 local GUI = {
@@ -1757,375 +1760,80 @@ end
 -- ============================================================
 -- GUI HELPERS
 -- ============================================================
--- ============================================================
--- PREMIUM TOGGLE VISUAL SYSTEM
--- Shared visual component for the Control Deck, mobile controls,
--- Feature Center boolean controls, and Advanced Suite rows.
--- State remains owned by the existing feature/configuration layer.
--- ============================================================
-local TOGGLE_TWEENS = setmetatable({}, {__mode = "k"})
-
-local function toggleMix(a, b, t)
-    if typeof(a) ~= "Color3" then a = UI_PANEL_INPUT end
-    if typeof(b) ~= "Color3" then b = UI_ACCENT end
-    t = cl(tonumber(t) or 0.5, 0, 1)
-    return Color3.new(
-        a.R + (b.R - a.R) * t,
-        a.G + (b.G - a.G) * t,
-        a.B + (b.B - a.B) * t
-    )
-end
-
-local function cancelToggleTweens(button)
-    local active = button and TOGGLE_TWEENS[button]
-    if type(active) ~= "table" then return end
-    for i = 1, #active do
-        local tr = active[i]
-        if tr then pcall(function() tr:Cancel() end) end
-    end
-    TOGGLE_TWEENS[button] = nil
-end
-
-local function trackToggleTween(button, tr)
-    if not tr then return end
-    local list = TOGGLE_TWEENS[button]
-    if not list then
-        list = {}
-        TOGGLE_TWEENS[button] = list
-    end
-    list[#list + 1] = tr
-    list.untilT = os.clock() + 0.50
-    pcall(function() tr:Play() end)
-end
-
-local function ensureToggleVisual(button, mode)
-    if not button or not button.Parent then return nil end
-    mode = mode == "row" and "row" or "compact"
-
-    local host = button
-    local switch = button:FindFirstChild("OPSYXToggleTrack")
-
-    if mode == "row" then
-        if not switch then
-            switch = Instance.new("Frame")
-            switch.Name = "OPSYXToggleTrack"
-            switch.Size = UDim2.fromOffset(52, 20)
-            switch.AnchorPoint = Vector2.new(1, 0.5)
-            switch.Position = UDim2.new(1, -10, 0.5, 0)
-            switch.BackgroundColor3 = UI_PANEL_INPUT
-            switch.BackgroundTransparency = 0.02
-            switch.BorderSizePixel = 0
-            switch.Active = false
-            switch.ZIndex = (tonumber(button.ZIndex) or 0) + 1
-            switch.Parent = host
-            pcall(function()
-                local c = Instance.new("UICorner")
-                c.CornerRadius = UDim.new(1, 0)
-                c.Parent = switch
-                local st = Instance.new("UIStroke")
-                st.Name = "OPSYXToggleTrackStroke"
-                st.Thickness = 1
-                st.Transparency = 0.45
-                st.Parent = switch
-            end)
-        end
-    else
-        switch = button
-    end
-
-    local knob = switch:FindFirstChild("OPSYXToggleKnob")
-    if not knob then
-        knob = Instance.new("Frame")
-        knob.Name = "OPSYXToggleKnob"
-        knob.BackgroundColor3 = UI_TEXT_PRIMARY
-        knob.BorderSizePixel = 0
-        knob.ZIndex = switch == button and ((tonumber(button.ZIndex) or 0) + 3) or ((tonumber(switch.ZIndex) or 0) + 2)
-        knob.Parent = switch
-        pcall(function()
-            local corner = Instance.new("UICorner")
-            corner.CornerRadius = UDim.new(1, 0)
-            corner.Parent = knob
-            local stroke = Instance.new("UIStroke")
-            stroke.Name = "OPSYXToggleKnobStroke"
-            stroke.Thickness = 1
-            stroke.Transparency = 0.30
-            stroke.Color = Color3.fromRGB(255,255,255)
-            stroke.Parent = knob
-            local sc = Instance.new("UIScale")
-            sc.Name = "OPSYXToggleKnobScale"
-            sc.Scale = 1
-            sc.Parent = knob
-        end)
-    end
-
-    local knobScale = knob:FindFirstChild("OPSYXToggleKnobScale")
-    if not knobScale then
-        knobScale = Instance.new("UIScale")
-        knobScale.Name = "OPSYXToggleKnobScale"
-        knobScale.Scale = 1
-        knobScale.Parent = knob
-    end
-
-    local stateLabel = switch:FindFirstChild("OPSYXToggleState")
-    if not stateLabel then
-        stateLabel = Instance.new("TextLabel")
-        stateLabel.Name = "OPSYXToggleState"
-        stateLabel.BackgroundTransparency = 1
-        stateLabel.BorderSizePixel = 0
-        stateLabel.ZIndex = knob.ZIndex - 1
-        stateLabel.Font = Enum.Font.GothamBold
-        stateLabel.TextColor3 = UI_TEXT_SECONDARY
-        stateLabel.TextStrokeTransparency = 0.90
-        stateLabel.TextXAlignment = Enum.TextXAlignment.Center
-        stateLabel.TextYAlignment = Enum.TextYAlignment.Center
-        stateLabel.Parent = switch
-    end
-
-    local glow = switch:FindFirstChild("OPSYXToggleGlow")
-    if not glow then
-        glow = Instance.new("Frame")
-        glow.Name = "OPSYXToggleGlow"
-        glow.BackgroundTransparency = 1
-        glow.BorderSizePixel = 0
-        glow.ZIndex = knob.ZIndex - 2
-        glow.Parent = switch
-        pcall(function()
-            local corner = Instance.new("UICorner")
-            corner.CornerRadius = UDim.new(1, 0)
-            corner.Parent = glow
-        end)
-    end
-
-    return {
-        mode = mode,
-        host = host,
-        switch = switch,
-        knob = knob,
-        knobScale = knobScale,
-        stateLabel = stateLabel,
-        glow = glow,
-        trackStroke = switch:FindFirstChild("OPSYXToggleTrackStroke"),
-        buttonStroke = button:FindFirstChild("OPSYXToggleStroke") or button:FindFirstChild("OPSYXAdvancedStroke"),
-    }
-end
-
-local function bindCompactToggleHover(button, onC, offC)
-    if not button or button:GetAttribute("OPSYXToggleHoverBound") then return end
-    pcall(function() button:SetAttribute("OPSYXToggleHoverBound", true) end)
-    button.MouseEnter:Connect(function()
-        pcall(function()
-            local on = button:GetAttribute("OPSYXToggleState") == true
-            tween(button, TweenInfo.new(0.10, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-                BackgroundTransparency = on and 0 or 0.02,
-            })
-            local knob = button:FindFirstChild("OPSYXToggleKnob")
-            local sc = knob and knob:FindFirstChild("OPSYXToggleKnobScale")
-            if sc then
-                tween(sc, TweenInfo.new(0.10, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Scale=1.05})
-            end
-            local st = button:FindFirstChild("OPSYXToggleStroke")
-            if st then
-                st.Color = on and onC or offC
-                tween(st, TweenInfo.new(0.10, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Transparency=0.18})
-            end
-        end)
-    end)
-    button.MouseLeave:Connect(function()
-        pcall(function()
-            local on = button:GetAttribute("OPSYXToggleState") == true
-            tween(button, TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-                BackgroundTransparency = on and 0.0 or 0.05,
-            })
-            local knob = button:FindFirstChild("OPSYXToggleKnob")
-            local sc = knob and knob:FindFirstChild("OPSYXToggleKnobScale")
-            if sc then
-                tween(sc, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Scale=1})
-            end
-            local st = button:FindFirstChild("OPSYXToggleStroke")
-            if st then
-                st.Color = on and onC or offC
-                tween(st, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Transparency=on and 0.30 or 0.55})
-            end
-        end)
-    end)
-    button.MouseButton1Down:Connect(function()
-        pcall(function()
-            local knob = button:FindFirstChild("OPSYXToggleKnob")
-            local sc = knob and knob:FindFirstChild("OPSYXToggleKnobScale")
-            if sc then
-                tween(sc, TweenInfo.new(0.06, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Scale=0.92})
-            end
-            tween(button, TweenInfo.new(0.06, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {BackgroundTransparency=0.01})
-        end)
-    end)
-    button.MouseButton1Up:Connect(function()
-        pcall(function()
-            local knob = button:FindFirstChild("OPSYXToggleKnob")
-            local sc = knob and knob:FindFirstChild("OPSYXToggleKnobScale")
-            if sc then
-                tween(sc, TweenInfo.new(0.10, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Scale=1})
-            end
-        end)
-    end)
-end
-
-local function animateToggleVisual(button, enabled, onC, offC, label, mode)
+local function animateToggleVisual(button, enabled, onC, offC, label)
     if not button or not button.Parent then return false end
     local on = enabled == true
-    local visual = ensureToggleVisual(button, mode)
-    if not visual then return false end
-
-    onC = typeof(onC) == "Color3" and onC or UI_ACTIVE
-    offC = typeof(offC) == "Color3" and offC or UI_BORDER
+    local desiredColor = on and onC or offC
+    local desiredText = (label and (label .. "  •  ")) or ""
+    desiredText = desiredText .. (on and "ON" or "OFF")
 
     local previous = nil
     pcall(function() previous = button:GetAttribute("OPSYXToggleState") end)
-    local changed = previous ~= on
-    if not changed then
-        local active = TOGGLE_TWEENS[button]
-        if active and active.untilT and os.clock() < active.untilT then
-            return false
+
+    local scale
+    pcall(function()
+        scale = button:FindFirstChild("OPSYXToggleScale")
+        if not scale then
+            scale = Instance.new("UIScale")
+            scale.Name = "OPSYXToggleScale"
+            scale.Scale = 1
+            scale.Parent = button
         end
-        if active then TOGGLE_TWEENS[button] = nil end
-    end
+    end)
 
-    local darkTrack = toggleMix(Color3.fromRGB(10, 15, 24), onC, 0.28)
-    local offTrack = Color3.fromRGB(22, 28, 40)
-    local trackColor = on and darkTrack or offTrack
-    local accentColor = on and onC or offC
-    local knobColor = on and Color3.fromRGB(245,255,255) or Color3.fromRGB(165,178,194)
-
-    if changed then cancelToggleTweens(button) end
-    pcall(function() button.AutoButtonColor = false end)
-    pcall(function() button:SetAttribute("OPSYXToggleState", on) end)
-
-    if visual.mode == "compact" then
-        local w = math.max(40, tonumber(button.Size.X.Offset) or 52)
-        local h = math.max(14, tonumber(button.Size.Y.Offset) or 20)
-        local k = cl(h - 4, 10, 20)
-        local leftX = 2
-        local rightX = math.max(leftX, w - k - 2)
-        local posX = on and rightX or leftX
-        visual.knob.Size = UDim2.fromOffset(k, k)
-        visual.knob.Position = UDim2.fromOffset(posX, math.floor((h - k) * 0.5 + 0.5))
-        visual.stateLabel.Text = on and "ON" or "OFF"
-        visual.stateLabel.Size = UDim2.fromOffset(18, h)
-        visual.stateLabel.Position = UDim2.fromOffset(on and 4 or math.max(4, w - 22), 0)
-        visual.stateLabel.TextColor3 = on and UI_TEXT_PRIMARY or UI_TEXT_MUTED
-        visual.stateLabel.TextSize = cl(math.floor(h * 0.43 + 0.5), 6, 10)
-        visual.glow.Size = UDim2.fromOffset(k + 9, k + 9)
-        visual.glow.Position = UDim2.fromOffset(posX + math.floor((k - (k + 9)) * 0.5), math.floor((h - (k + 9)) * 0.5 + 0.5))
-        visual.host.BackgroundColor3 = trackColor
-        visual.host.BackgroundTransparency = on and 0.0 or 0.05
-        visual.glow.BackgroundColor3 = onC
-        visual.glow.BackgroundTransparency = 1
-        local st = visual.buttonStroke
-        if st then
-            st.Color = accentColor
-            st.Transparency = on and 0.30 or 0.55
-            st.Thickness = 1.15
+    pcall(function()
+        local stroke = button:FindFirstChild("OPSYXToggleStroke")
+        if not stroke then
+            stroke = Instance.new("UIStroke")
+            stroke.Name = "OPSYXToggleStroke"
+            stroke.Thickness = 1.15
+            stroke.Transparency = 0.55
+            stroke.Parent = button
         end
-        pcall(function()
-            local ks = visual.knob:FindFirstChild("OPSYXToggleKnobStroke")
-            if ks then
-                ks.Color = on and onC or Color3.fromRGB(100,112,128)
-                ks.Transparency = on and 0.22 or 0.35
-            end
-        end)
-        bindCompactToggleHover(button, onC, offC)
-    else
-        local swW = math.max(44, tonumber(visual.switch.Size.X.Offset) or 52)
-        local swH = math.max(16, tonumber(visual.switch.Size.Y.Offset) or 20)
-        local k = cl(swH - 5, 10, 17)
-        local leftX = 3
-        local rightX = math.max(leftX, swW - k - 3)
-        local posX = on and rightX or leftX
-        visual.knob.Size = UDim2.fromOffset(k, k)
-        visual.knob.Position = UDim2.fromOffset(posX, math.floor((swH - k) * 0.5 + 0.5))
-        visual.stateLabel.Text = on and "ON" or "OFF"
-        visual.stateLabel.Size = UDim2.fromOffset(18, swH)
-        visual.stateLabel.Position = UDim2.fromOffset(on and 6 or math.max(6, swW - 24), 0)
-        visual.stateLabel.TextColor3 = on and UI_TEXT_PRIMARY or UI_TEXT_MUTED
-        visual.stateLabel.TextSize = 8
-        visual.glow.Size = UDim2.fromOffset(k + 8, k + 8)
-        visual.glow.Position = UDim2.fromOffset(posX + math.floor((k - (k + 8)) * 0.5), math.floor((swH - (k + 8)) * 0.5 + 0.5))
-        visual.switch.BackgroundColor3 = trackColor
-        visual.switch.BackgroundTransparency = on and 0.0 or 0.03
-        visual.glow.BackgroundColor3 = onC
-        visual.glow.BackgroundTransparency = 1
-        local st = visual.trackStroke or visual.buttonStroke
-        if st then
-            st.Color = accentColor
-            st.Transparency = on and 0.20 or 0.58
-            st.Thickness = 1
-        end
-        pcall(function()
-            local ks = visual.knob:FindFirstChild("OPSYXToggleKnobStroke")
-            if ks then
-                ks.Color = on and onC or Color3.fromRGB(100,112,128)
-                ks.Transparency = on and 0.18 or 0.35
-            end
-        end)
-    end
+        stroke.Color = desiredColor
+    end)
 
-    if not changed then
-        pcall(function() visual.knobScale.Scale = 1 end)
+    button.Text = desiredText
+    button.AutoButtonColor = false
+
+    -- The state attribute prevents the normal 0.15s refresh loop from replaying
+    -- the animation continuously. It only animates when the real state changes.
+    if previous == on then
+        button.BackgroundColor3 = desiredColor
+        if scale then scale.Scale = 1 end
         return false
     end
 
-    if ST and ST.fcStats then
-        ST.fcStats.toggles = (ST.fcStats.toggles or 0) + 1
+    pcall(function() button:SetAttribute("OPSYXToggleState", on) end)
+    if ST and ST.fcStats then ST.fcStats.toggles=(ST.fcStats.toggles or 0)+1 end
+
+    -- 3X visual feedback: color tween + overshoot + settle + text emphasis.
+    local targetScale = on and 1.075 or 0.94
+    pcall(function()
+        tween(button, TweenInfo.new(0.14, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+            BackgroundColor3 = desiredColor,
+            BackgroundTransparency = on and 0.0 or 0.06,
+        })
+    end)
+    if scale then
+        pcall(function()
+            tween(scale, TweenInfo.new(0.11, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Scale = targetScale})
+            tsp(function()
+                tw(0.10)
+                if not ST.ld then return end
+                tween(scale, TweenInfo.new(0.18, Enum.EasingStyle.Elastic, Enum.EasingDirection.Out), {Scale = 1})
+            end)
+        end)
     end
-
-    local w = visual.mode == "compact" and math.max(40, tonumber(visual.switch.Size.X.Offset) or 52)
-        or math.max(44, tonumber(visual.switch.Size.X.Offset) or 52)
-    local h = visual.mode == "compact" and math.max(14, tonumber(visual.switch.Size.Y.Offset) or 20)
-        or math.max(16, tonumber(visual.switch.Size.Y.Offset) or 20)
-    local k = visual.mode == "compact" and cl(h - 4, 10, 20) or cl(h - 5, 10, 17)
-    local leftX = visual.mode == "compact" and 2 or 3
-    local rightX = math.max(leftX, w - k - leftX)
-    local targetPos = UDim2.fromOffset(on and rightX or leftX, math.floor((h-k) * 0.5 + 0.5))
-    local extra = visual.mode == "compact" and 9 or 8
-    local glowPos = UDim2.fromOffset(
-        (on and rightX or leftX) + math.floor((k - (k + extra)) * 0.5),
-        math.floor((h - (k + extra)) * 0.5 + 0.5)
-    )
-
     pcall(function()
-        trackToggleTween(button, TS:Create(visual.knob, TweenInfo.new(0.18, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-            Position = targetPos,
-            BackgroundColor3 = knobColor,
-        }))
-        trackToggleTween(button, TS:Create(visual.knobScale, TweenInfo.new(0.12, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-            Scale = on and 1.07 or 0.96,
-        }))
-        trackToggleTween(button, TS:Create(visual.switch, TweenInfo.new(0.17, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
-            BackgroundColor3 = trackColor,
-            BackgroundTransparency = on and 0 or 0.04,
-        }))
-        if visual.glow then
-            visual.glow.Position = glowPos
-            visual.glow.BackgroundColor3 = onC
-            visual.glow.BackgroundTransparency = 0.72
-            trackToggleTween(button, TS:Create(visual.glow, TweenInfo.new(0.30, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-                BackgroundTransparency = 1,
-            }))
-        end
-        local st = visual.trackStroke or visual.buttonStroke
-        if st then
-            trackToggleTween(button, TS:Create(st, TweenInfo.new(0.24, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-                Transparency = on and 0.20 or 0.58,
-                Thickness = on and 1.20 or 1.0,
-            }))
+        local stroke = button:FindFirstChild("OPSYXToggleStroke")
+        if stroke then
+            stroke.Transparency = 0.05
+            tween(stroke, TweenInfo.new(0.28, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+                Transparency = 0.35, Thickness = 1.25
+            })
         end
     end)
-
-    pcall(function()
-        local settleInfo = TweenInfo.new(0.11, Enum.EasingStyle.Quint, Enum.EasingDirection.Out, 0, false, 0.16)
-        trackToggleTween(button, TS:Create(visual.knob, settleInfo, {Position=targetPos}))
-        trackToggleTween(button, TS:Create(visual.knobScale, TweenInfo.new(0.10, Enum.EasingStyle.Quint, Enum.EasingDirection.Out, 0, false, 0.13), {Scale=1}))
-    end)
-
     return true
 end
 
@@ -2136,37 +1844,13 @@ local function updBtn(name, state, onC, offC)
 end
 
 local function refreshMainFeaturePills()
-    local states = {
-        AIMBOT = {S.AM.on, C_GRN, C_RED},
-        ESP = {S.ES.on, C_GRN, C_RED},
-        SILENT = {S.SL.on, C_GRN, C_ORG},
-        TRIGGER = {S.TR.on, C_GRN, C_RED},
-        FOV = {S.FV.on, C_GRN, C_BLU},
-        WALL = {true, C_GRN, C_ORG},
-        ["HOLD AIM"] = {holdToAimEnabled, C_GRN, C_ORG},
-    }
-    for name, spec in pairs(states) do
-        updBtn(name, spec[1], spec[2], spec[3])
-        local mobile = MOBILE_PILLS[name]
-        if mobile and mobile.Parent then
-            animateToggleVisual(mobile, spec[1], spec[2], spec[3], nil, "compact")
-        end
-    end
-
-    local cleanMap = {
-        espName = {"NAME", S.ES.name},
-        espHealth = {"HEALTH", S.ES.health},
-        espDistance = {"DISTANCE", S.ES.distance},
-        espHighlight = {"HIGHLIGHT", S.ES.highlight},
-        espVisibility = {"VISIBILITY", S.ES.visibility},
-    }
-    for key, spec in pairs(cleanMap) do
-        local b = CLEAN_TOGGLE_BUTTONS[key]
-        if b and b.Parent then
-            animateToggleVisual(b, spec[2], C_GRN, C_RED, nil, "row")
-            b.Text = spec[1]
-        end
-    end
+    updBtn("AIMBOT", S.AM.on, C_GRN, C_RED)
+    updBtn("ESP", S.ES.on, C_GRN, C_RED)
+    updBtn("SILENT", S.SL.on, C_GRN, C_ORG)
+    updBtn("TRIGGER", S.TR.on, C_GRN, C_RED)
+    updBtn("FOV", S.FV.on, C_GRN, C_BLU)
+    updBtn("WALL", true, C_GRN, C_ORG)
+    updBtn("HOLD AIM", holdToAimEnabled, C_GRN, C_ORG)
 end
 
 function ST.__closeAuxPanels(except)
@@ -3522,8 +3206,6 @@ ST.__CGCTX = {
     v39SafeFeature = v39SafeFeature,
     v39Recovery = v39Recovery,
     PILLS = PILLS,
-    MOBILE_PILLS = MOBILE_PILLS,
-    CLEAN_TOGGLE_BUTTONS = CLEAN_TOGGLE_BUTTONS,
     CONNS = CONNS,
     hook = hook,
     GUI = GUI,
@@ -4005,11 +3687,11 @@ local function cg()
         lbEl.Parent = row
 
         local pill = Instance.new("TextButton")
-        pill.Size = UDim2.new(1, -12, 0, 18)
-        pill.Position = UDim2.new(0, 6, 1, -22)
+        pill.Size = UDim2.new(1, -12, 0, 16)
+        pill.Position = UDim2.new(0, 6, 1, -20)
         pill.BackgroundColor3 = getter() and onCol or offCol
         pill.BorderSizePixel = 0
-        pill.Text = ""
+        pill.Text = getter() and "ON" or "OFF"
         pill.TextColor3 = Color3.fromRGB(255,255,255)
         pill.TextSize = 8
         pill.Font = Enum.Font.GothamBold
@@ -4018,9 +3700,14 @@ local function cg()
         pcall(function() Instance.new("UICorner", pill).CornerRadius = UDim.new(1,0) end)
 
         C.PILLS[lbl] = pill
-        C.animateToggleVisual(pill, getter(), onCol, offCol, nil, "compact")
+        local function refresh()
+            local ns = getter()
+            pill.BackgroundColor3 = ns and onCol or offCol
+            pill.Text = ns and "ON" or "OFF"
+        end
         pill.Activated:Connect(function()
             local ok, err = pcall(setter)
+            refresh()
             if not ok then
                 warn("[OPSYX] Toggle " .. tostring(lbl) .. " failed: " .. tostring(err))
             end
@@ -4059,7 +3746,7 @@ local function cg()
 
     makeToggle("WALL", CARD_X + 5*(CARD_W+CARD_GAP), CARD_Y, CARD_W, C.C_ORG, C.C_GRN,
         function() return true end,
-        function() C.S.AM.wc=true; C.S.SL.wc=true; C.S.TR.wc=true; C.refreshMainFeaturePills() end)
+        function() C.S.AM.wc=true; C.S.SL.wc=true; C.S.TR.wc=true end)
 
     makeToggle("HOLD AIM", CARD_X + 6*(CARD_W+CARD_GAP), CARD_Y, CARD_W, C.C_ORG, C.C_GRN,
         function() return holdToAimEnabled end,
@@ -5802,17 +5489,20 @@ if MOB then
             local pill = Instance.new("TextButton")
             pill.Size = UDim2.new(0,52,0,22); pill.Position = UDim2.new(1,-56,0.5,-11)
             pill.BackgroundColor3 = getter() and onC or offC; pill.BorderSizePixel = 0
-            pill.Text = ""
+            pill.Text = getter() and "ON" or "OFF"
             pill.TextColor3 = Color3.fromRGB(255,255,255)
             pill.TextSize = 11; pill.Font = Enum.Font.GothamBold; pill.Parent = row
             pcall(function() Instance.new("UICorner",pill).CornerRadius = UDim.new(1,0) end)
-            C.MOBILE_PILLS[lbl] = pill
-            C.animateToggleVisual(pill, getter(), onC, offC, nil, "compact")
+
+            local function refresh()
+                local ns = getter()
+                pill.BackgroundColor3 = ns and onC or offC
+                pill.Text = ns and "ON" or "OFF"
+            end
             pill.Activated:Connect(function()
                 local ok, err = pcall(setter)
-                if not ok then
-                    warn("[OPSYX] Mobile toggle " .. tostring(lbl) .. " failed: " .. tostring(err))
-                end
+                refresh()
+                if not ok then warn("[OPSYX] Mobile toggle " .. tostring(lbl) .. " failed: " .. tostring(err)) end
             end)
             mY = mY + mGAP
         end
@@ -5842,12 +5532,11 @@ if MOB then
             function()
                 S.TP.on = not S.TP.on
                 setThirdPerson(S.TP.on)
-                refreshMainFeaturePills()
             end)
 
         mToggle("WALL", C_ORG, C_GRN,
             function() return true end,
-            function() S.AM.wc=true; S.SL.wc=true; S.TR.wc=true; refreshMainFeaturePills() end)
+            function() S.AM.wc=true; S.SL.wc=true; S.TR.wc=true end)
 
         mToggle("HOLD AIM", C_ORG, C_GRN,
             function() return holdToAimEnabled end,
@@ -5860,7 +5549,6 @@ if MOB then
                 else
                     clearHeadCache()
                 end
-                refreshMainFeaturePills()
             end)
 
         -- Final mobile readability pass.  Some executor/client combinations
@@ -5961,21 +5649,17 @@ local function buildFeatureCenterCleanControls()
             return b
         end
 
-        local nameBtn = addCleanButton(0,0,"NAME",function() toggleFeatureState("espName") end)
-        local healthBtn = addCleanButton(1,0,"HEALTH",function() toggleFeatureState("espHealth") end)
-        local distBtn2 = addCleanButton(2,0,"DISTANCE",function() toggleFeatureState("espDistance") end)
-        local highlightBtn2 = addCleanButton(0,1,"HIGHLIGHT",function() toggleFeatureState("espHighlight") end)
-        local visibilityBtn2 = addCleanButton(1,1,"VISIBILITY",function() toggleFeatureState("espVisibility") end)
-        CLEAN_TOGGLE_BUTTONS.espName = nameBtn
-        CLEAN_TOGGLE_BUTTONS.espHealth = healthBtn
-        CLEAN_TOGGLE_BUTTONS.espDistance = distBtn2
-        CLEAN_TOGGLE_BUTTONS.espHighlight = highlightBtn2
-        CLEAN_TOGGLE_BUTTONS.espVisibility = visibilityBtn2
-        animateToggleVisual(nameBtn, S.ES.name, C_GRN, C_RED, nil, "row")
-        animateToggleVisual(healthBtn, S.ES.health, C_GRN, C_RED, nil, "row")
-        animateToggleVisual(distBtn2, S.ES.distance, C_GRN, C_RED, nil, "row")
-        animateToggleVisual(highlightBtn2, S.ES.highlight, C_GRN, C_RED, nil, "row")
-        animateToggleVisual(visibilityBtn2, S.ES.visibility, C_GRN, C_RED, nil, "row")
+        local function updateBoolButton(b, label, key)
+            local on = S.ES[key] == true
+            b.Text = label .. "  •  " .. (on and "ON" or "OFF")
+            b.BackgroundColor3 = on and Color3.fromRGB(24,78,52) or Color3.fromRGB(42,35,43)
+        end
+
+        local nameBtn = addCleanButton(0,0,"NAME",function() S.ES.name=not S.ES.name; updateBoolButton(nameBtn,"NAME","name") end)
+        local healthBtn = addCleanButton(1,0,"HEALTH",function() S.ES.health=not S.ES.health; updateBoolButton(healthBtn,"HEALTH","health") end)
+        local distBtn2 = addCleanButton(2,0,"DISTANCE",function() S.ES.distance=not S.ES.distance; updateBoolButton(distBtn2,"DISTANCE","distance") end)
+        local highlightBtn2 = addCleanButton(0,1,"HIGHLIGHT",function() S.ES.highlight=not S.ES.highlight; updateBoolButton(highlightBtn2,"HIGHLIGHT","highlight") end)
+        local visibilityBtn2 = addCleanButton(1,1,"VISIBILITY",function() S.ES.visibility=not S.ES.visibility; updateBoolButton(visibilityBtn2,"VISIBILITY","visibility") end)
         local opacityBtn = addCleanButton(2,1,"UI OPACITY  •  100%",function()
             GUI.fcOpacity = GUI.fcOpacity or 1
             local vals={1,.9,.8,.7,.6}
@@ -5994,6 +5678,11 @@ local function buildFeatureCenterCleanControls()
             end
             opacityBtn.Text="UI OPACITY  •  "..math.floor(GUI.fcOpacity*100+.5).."%"
         end)
+        updateBoolButton(nameBtn,"NAME","name")
+        updateBoolButton(healthBtn,"HEALTH","health")
+        updateBoolButton(distBtn2,"DISTANCE","distance")
+        updateBoolButton(highlightBtn2,"HIGHLIGHT","highlight")
+        updateBoolButton(visibilityBtn2,"VISIBILITY","visibility")
 
         addCleanButton(0,2,"SESSION / ESP STATS",function()
             local st=ST.fcStats; local up=math.floor(os.clock()-st.start)
@@ -8356,7 +8045,7 @@ ST.setupV40 = function()
                 stroke.Parent = b
                 local padding = Instance.new("UIPadding")
                 padding.PaddingLeft = UDim.new(0, 10)
-                padding.PaddingRight = UDim.new(0, 76)
+                padding.PaddingRight = UDim.new(0, 32)
                 padding.Parent = b
                 local scale = Instance.new("UIScale")
                 scale.Name = "OPSYXAdvancedScale"
@@ -8594,24 +8283,34 @@ ST.setupV40 = function()
             if enabled == nil then
                 pcall(b.SetAttribute, b, "OPSYXToggleState", nil)
                 b.BackgroundColor3 = UI_PANEL_INPUT
-                b.BackgroundTransparency = 0.04
                 b.TextColor3 = UI_TEXT_PRIMARY
-                local track = b:FindFirstChild("OPSYXToggleTrack")
-                if track then track.Visible = false end
+            else
+                local on = enabled == true
+                pcall(b.SetAttribute, b, "OPSYXToggleState", on)
+                b.BackgroundColor3 = on and UI_ACTIVE or UI_PANEL_INPUT
+                b.BackgroundTransparency = on and 0.02 or 0.04
+                b.TextColor3 = on and UI_TEXT_PRIMARY or UI_TEXT_SECONDARY
                 local dot = b:FindFirstChild("OPSYXStateDot")
-                if dot then dot.Visible = false end
-                local stroke = b:FindFirstChild("OPSYXAdvancedStroke")
-                if stroke then stroke.Color = UI_BORDER; stroke.Transparency = 0.55; stroke.Thickness = 1 end
+                if dot then
+                    dot.Visible = true
+                    dot.BackgroundColor3 = on and UI_SUCCESS or UI_DANGER
+                    dot.BackgroundTransparency = on and 0.02 or 0.18
+                end
+                pcall(function()
+                    local stroke = b:FindFirstChild("OPSYXAdvancedStroke")
+                    if stroke then
+                        stroke.Color = on and UI_ACTIVE or UI_BORDER
+                        stroke.Transparency = on and 0.18 or 0.55
+                    end
+                end)
                 return
             end
-
-            local on = enabled == true
-            local track = b:FindFirstChild("OPSYXToggleTrack")
-            if track then track.Visible = true end
-            animateToggleVisual(b, on, UI_ACTIVE, UI_BORDER, nil, "row")
-            b.TextColor3 = on and UI_TEXT_PRIMARY or UI_TEXT_SECONDARY
             local dot = b:FindFirstChild("OPSYXStateDot")
             if dot then dot.Visible = false end
+            pcall(function()
+                local stroke = b:FindFirstChild("OPSYXAdvancedStroke")
+                if stroke then stroke.Color = UI_BORDER; stroke.Transparency = 0.55 end
+            end)
         end
 
         local function setAdvRowHeight()
@@ -9389,16 +9088,16 @@ ST.setupV40 = function()
                 return x or fallback
             end
 
-            row("aim_enable", "Enable", S.AM.on)
+            row("aim_enable", "Enable  •  " .. onoff(S.AM.on), S.AM.on)
             row("aim_part", "Aim Part  •  " .. tostring(S.AM.targetPart or "Head"))
             row("aim_fov", "FOV  •  " .. math.floor(n(S.FV.r, 130) + 0.5))
-            row("aim_team", "Team Check", S.AM.tc)
-            row("aim_visibility", "Visibility Check", S.AM.wc)
-            row("aim_alive", "Alive Check", S.AM.aliveCheck)
+            row("aim_team", "Team Check  •  " .. onoff(S.AM.tc), S.AM.tc)
+            row("aim_visibility", "Visibility Check  •  " .. onoff(S.AM.wc), S.AM.wc)
+            row("aim_alive", "Alive Check  •  " .. onoff(S.AM.aliveCheck), S.AM.aliveCheck)
             row("aim_priority", "Target Priority  •  " .. tostring(S.AM.priority or "CROSSHAIR"))
             row("aim_maxdist", "Max Distance  •  " .. math.floor(n(S.AM.md, 1000) + 0.5))
-            row("aim_lock", "Target Lock", S.AM.targetLock)
-            row("aim_switch", "Target Switching", S.AM.targetSwitching)
+            row("aim_lock", "Target Lock  •  " .. onoff(S.AM.targetLock), S.AM.targetLock)
+            row("aim_switch", "Target Switching  •  " .. onoff(S.AM.targetSwitching), S.AM.targetSwitching)
 
             row("aim_smooth", "Smoothness  •  " .. string.format("%.2f", n(S.AM.sm, 0.35)))
             row("aim_sensitivity", "Sensitivity  •  " .. string.format("%.2f", n(S.AM.sensitivity, 1.00)))
@@ -9409,30 +9108,30 @@ ST.setupV40 = function()
             row("aim_activation", "Activation Mode  •  " .. tostring(S.AM.activationMode or "TOGGLE"))
             row("aim_hold_toggle", "Hold/Toggle  •  " .. (S.AM.holdMode and "HOLD" or "TOGGLE"))
 
-            row("cross_enable", "Crosshair", STATE.crosshair)
+            row("cross_enable", "Crosshair  •  " .. onoff(STATE.crosshair), STATE.crosshair)
             row("cross_size", "Size  •  " .. math.floor(n(STATE.crosshairSize, 7) + 0.5))
             row("cross_thickness", "Thickness  •  " .. string.format("%.1f", n(STATE.crosshairThickness, 1.5)))
             row("cross_gap", "Gap  •  " .. math.floor(n(STATE.crosshairGap, 5) + 0.5))
-            row("cross_dot", "Center Dot", STATE.crosshairDot)
-            row("cross_outline", "Outline", STATE.crosshairOutline ~= false)
+            row("cross_dot", "Center Dot  •  " .. onoff(STATE.crosshairDot), STATE.crosshairDot)
+            row("cross_outline", "Outline  •  " .. onoff(STATE.crosshairOutline ~= false), STATE.crosshairOutline ~= false)
             row("cross_opacity", "Opacity  •  " .. string.format("%.2f", n(STATE.crosshairOpacity, 1)))
             row("cross_reset", "RESET CROSSHAIR")
 
-            row("esp_enable", "ESP", S.ES.on)
+            row("esp_enable", "ESP  •  " .. onoff(S.ES.on), S.ES.on)
             row("esp_box", "Box  •  " .. espBoxStateText())
-            row("esp_name", "Name", S.ES.name)
-            row("esp_distance", "Distance", S.ES.distance)
-            row("esp_health", "Health", S.ES.health)
-            row("esp_tracer", "Tracer", S.ES.tracer)
-            row("esp_highlight", "Highlight", S.ES.highlight)
-            row("esp_team", "Team Check", S.ES.tc)
-            row("esp_visibility", "Visibility", S.ES.visibility)
+            row("esp_name", "Name  •  " .. onoff(S.ES.name), S.ES.name)
+            row("esp_distance", "Distance  •  " .. onoff(S.ES.distance), S.ES.distance)
+            row("esp_health", "Health  •  " .. onoff(S.ES.health), S.ES.health)
+            row("esp_tracer", "Tracer  •  " .. onoff(S.ES.tracer), S.ES.tracer)
+            row("esp_highlight", "Highlight  •  " .. onoff(S.ES.highlight), S.ES.highlight)
+            row("esp_team", "Team Check  •  " .. onoff(S.ES.tc), S.ES.tc)
+            row("esp_visibility", "Visibility  •  " .. onoff(S.ES.visibility), S.ES.visibility)
             row("esp_maxdist", "Max Distance  •  " .. math.floor(n(S.ES.md, ESP_MAX_RANGE) + 0.5))
             row("esp_preset", "ESP Preset  •  " .. tostring(S.ES.espPreset or STATE.espPreset or "CUSTOM"))
             row("esp_reset", "RESET ESP")
 
             row("perf_mode", "Performance Mode  •  " .. tostring(STATE.performance or "BALANCED"))
-            row("perf_lightweight", "Lightweight Mode", STATE.lightweight)
+            row("perf_lightweight", "Lightweight Mode  •  " .. onoff(STATE.lightweight), STATE.lightweight)
             row("perf_esp_rate", "ESP Update Rate  •  " .. math.floor(n(S.ES.updateRate, 30) + 0.5) .. " Hz")
             row("perf_scan_rate", "Target Scan Rate  •  " .. math.floor(n(STATE.targetScanRate, 120) + 0.5) .. " Hz")
             row("perf_ui_rate", "UI Update Rate  •  " .. math.floor(n(STATE.uiUpdateRate, 30) + 0.5) .. " Hz")
@@ -9440,7 +9139,7 @@ ST.setupV40 = function()
             row("perf_reset", "RESET PERFORMANCE")
 
             row("theme_scale", "UI Scale  •  " .. string.format("%.2f", n(STATE.uiScale, 1)))
-            row("theme_compact", "Compact Mode", STATE.compactMode)
+            row("theme_compact", "Compact Mode  •  " .. onoff(STATE.compactMode), STATE.compactMode)
             row("theme_spacing", "UI Spacing  •  " .. math.floor(n(STATE.uiSpacing, 6) + 0.5))
             row("theme_transparency", "Transparency  •  " .. string.format("%.2f", n(STATE.transparency, 0.03)))
             row("theme_name", "Theme  •  " .. tostring(STATE.theme or "MIDNIGHT"))
@@ -9471,7 +9170,7 @@ ST.setupV40 = function()
             row("safety_disable_esp", "DISABLE ESP")
             row("safety_disable_cross", "DISABLE CROSSHAIR")
             row("safety_cleanup_owned", "CLEANUP OPSYX OBJECTS")
-            row("safety_pause_loop", "Managed Feature Loop", STATE.runtimePaused)
+            row("safety_pause_loop", "Managed Feature Loop  •  " .. (STATE.runtimePaused and "PAUSED" or "RUNNING"), STATE.runtimePaused)
 
             local active = {}
             if S.AM.on then active[#active+1] = "AIM" end
@@ -10344,3 +10043,4 @@ function _G.__V94OPSYX_CL()
     _G.__V94OPSYX_LD = nil; _G.__V94OPSYX_CL = nil
 end
 print("OPSYX Loaded")
+print("Enjoy Playing")
