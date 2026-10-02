@@ -3,7 +3,7 @@ if _G.__V94OPSYX_LD then
     if type(oldCleanup) == "function" then
         pcall(oldCleanup)
     end
-    -- Cleanup is synchronous/single-flight; do not yield here. 300
+    -- Cleanup is synchronous/single-flight; do not yield here. 301
     -- Yielding during re-execution only delays the new instance startup and
     -- can create a transient half-initialized state.
 end
