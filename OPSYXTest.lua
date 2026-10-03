@@ -1,5 +1,5 @@
 -- ============================================================
--- RE-EXECUTION GUARD 50
+-- RE-EXECUTION GUARD 1
 -- If OPSYX is already running, unload the previous instance first
 -- so the new execution starts cleanly without duplicate UI/connections.
 -- ============================================================
@@ -163,12 +163,10 @@ local function rn(l)
 end
 
 -- [IMPROVE-UTIL] safeFloor actually rounds (floor + 0.5), not just floors.
--- Renamed safeRound for clarity; safeFloor kept as alias for back-compat.
-local function safeRound(v, fb)
+local function safeFloor(v, fb)
     if v ~= v or v == math.huge or v == -math.huge then return fb or 0 end
     return math.floor(v + 0.5)
 end
-local safeFloor = safeRound  -- back-compat alias
 
 -- ============================================================
 -- COLOR CONSTANTS
@@ -458,6 +456,7 @@ local ST = {
         cleanupState="IDLE",
         protectLastMs=0, protectSlow=0, protectFaults=0, protectRepairs=0,
         protectChecks=0, protectStatus="READY", protectLast="",
+        runtimeLogHead=1,
     },
 }
 
@@ -476,15 +475,15 @@ end
 
 -- [IMPROVE-LOG] Replace repeated table.remove(1) (O(n) per overflow) with a
 -- fixed-size ring-buffer write so log appends are always O(1).
-local RUNTIME_LOG_HEAD = 1  -- index of the oldest entry (next overwrite slot)
 local function v39Log(category, message)
     if not S.V39.sessionLog then return end
     local entry = {t=os.clock(), category=tostring(category), message=tostring(message)}
     if #RUNTIME_LOG < RUNTIME_LOG_MAX then
         RUNTIME_LOG[#RUNTIME_LOG + 1] = entry
     else
-        RUNTIME_LOG[RUNTIME_LOG_HEAD] = entry
-        RUNTIME_LOG_HEAD = (RUNTIME_LOG_HEAD % RUNTIME_LOG_MAX) + 1
+        local head = tonumber(ST.v39.runtimeLogHead) or 1
+        RUNTIME_LOG[head] = entry
+        ST.v39.runtimeLogHead = (head % RUNTIME_LOG_MAX) + 1
     end
 end
 
@@ -974,6 +973,28 @@ end
 -- targeting when a single property access fails.
 -- ============================================================
 local WHITE_BRICK = BrickColor.new("White")
+
+-- One authoritative team relationship calculation is shared by targeting and
+-- ESP. This preserves the existing targeting fail-open behavior when a
+-- protected TeamColor read fails and the configurable White-team policy.
+local function computeTeamEnemy(pl, whiteAsEnemy)
+    if pl == ME then return false end
+
+    local enemy = true
+    local okMy, myCol = pcall(function() return ME.TeamColor end)
+    local okTh, theirCol = pcall(function() return pl.TeamColor end)
+
+    if okMy and okTh and myCol and theirCol then
+        if myCol == WHITE_BRICK or theirCol == WHITE_BRICK then
+            enemy = (whiteAsEnemy == nil) and true or whiteAsEnemy
+        else
+            enemy = myCol ~= theirCol
+        end
+    end
+
+    return enemy
+end
+
 local function isEnemy(pl, teamCheck)
     if pl == ME then return false end
     if teamCheck == nil then teamCheck = S.AM.tc end
@@ -982,22 +1003,7 @@ local function isEnemy(pl, teamCheck)
     local cached = TARGET_TEAM_CACHE[pl]
     if cached ~= nil then return cached end
 
-    local enemy = true
-    local okMy, myCol = pcall(function() return ME.TeamColor end)
-    local okTh, theirCol = pcall(function() return pl.TeamColor end)
-    if okMy and okTh and myCol and theirCol then
-        if myCol == WHITE_BRICK or theirCol == WHITE_BRICK then
-            -- [FIX-9.44-H] White-team symmetry: S.AM.whiteAsEnemy (default true)
-            -- controls whether "no team" (White) players are treated as enemies.
-            -- true  = fail-closed, old behavior (FFA servers, default).
-            -- false = treat White-vs-White as teammates (team-based servers
-            --         where White is the default before teams assign).
-            local wae = (S.AM.whiteAsEnemy == nil) and true or S.AM.whiteAsEnemy
-            enemy = wae
-        else
-            enemy = myCol ~= theirCol
-        end
-    end
+    local enemy = computeTeamEnemy(pl, S.AM.whiteAsEnemy)
     TARGET_TEAM_CACHE[pl] = enemy
     return enemy
 end
@@ -1330,7 +1336,6 @@ end
 -- where individual samples are reliable, and more stable at low FPS.
 -- MAX_SPEED capped at 400 su/s; teleports above that threshold return
 -- currentPos directly rather than projecting into thin air.
-local PRED_MAX_SPEED = 400
 local function pp(p, pl, pd)
     if pd <= 0 or not pl then return p.Position end
     local n = os.clock()
@@ -1351,7 +1356,7 @@ local function pp(p, pl, pd)
         local raw = (currentPos - previousPos) / age
         local vm  = raw.Magnitude
         -- Teleport guard: skip prediction on impossible deltas.
-        if vm > PRED_MAX_SPEED then
+        if vm > 400 then
             pr2.vel = Vector3.zero
             return currentPos
         end
@@ -1416,23 +1421,13 @@ end
 -- cannot reach expensive ESP calculations and that stale ESP is removed.
 local function espTeamEnemyPass(pl)
     -- Team state changes are event-invalidated, so repeated ESP ticks can reuse
-    -- the last verified relationship instead of performing two protected property
-    -- reads on every player every scan. The cache is still fail-closed.
+    -- the same authoritative relationship calculation used by targeting.
+    -- White/no-team handling and protected TeamColor read failures therefore
+    -- stay consistent across both subsystems.
     local cached = ESP_TEAM_CACHE[pl]
     if cached ~= nil then return cached end
 
-    local okMy, myCol = pcall(function() return ME.TeamColor end)
-    local okTh, theirCol = pcall(function() return pl.TeamColor end)
-    if not okMy or not okTh or not myCol or not theirCol then
-        ESP_TEAM_CACHE[pl] = false
-        return false
-    end
-    local enemy
-    if myCol == WHITE_BRICK or theirCol == WHITE_BRICK then
-        enemy = true
-    else
-        enemy = myCol ~= theirCol
-    end
+    local enemy = computeTeamEnemy(pl, S.AM.whiteAsEnemy)
     ESP_TEAM_CACHE[pl] = enemy
     return enemy
 end
@@ -1946,13 +1941,6 @@ end
 -- Ctrl+F8 is the master UI visibility switch. Unlike F7, it also hides the
 -- Restore/FPS bar, so the entire OPSYX UI can be made invisible.
 local MASTER_UI_HIDDEN = false
-
-local function ctrlHeld()
-    local left, right = false, false
-    pcall(function() left = UI:IsKeyDown(Enum.KeyCode.LeftControl) end)
-    pcall(function() right = UI:IsKeyDown(Enum.KeyCode.RightControl) end)
-    return left or right
-end
 
 local function toggleMasterUIVisibility()
     if not GUI.main then return end
@@ -2876,7 +2864,7 @@ hook(UI.InputChanged:Connect(_sharedDragMove))  -- single global connection repl
 -- switching AnchorPoint.  These panels are normally right-anchored at (1,0).
 -- Changing that anchor directly to (0,0) moves the panel immediately by its
 -- width, which caused the visible first-click jump before any mouse delta existed.
-local function preserveTopLeftBeforeZeroAnchor(panel, sc)
+ST.__preserveTopLeftBeforeZeroAnchor = function(panel, sc)
     if not panel then return 0, 0 end
     sc = tonumber(sc) or 1
     if sc <= 0 then sc = 1 end
@@ -2890,7 +2878,7 @@ local function preserveTopLeftBeforeZeroAnchor(panel, sc)
     end
 
     -- Convert screen-space top-left into the panel parent's local coordinate
-    -- system.  Using AbsolutePosition directly as Position was the cause of
+    -- system. Using AbsolutePosition directly as Position was the cause of
     -- first-click jumps when the parent/UIScale was not at screen origin.
     local localX = (absPos.X - parentAbs.X) / sc
     local localY = (absPos.Y - parentAbs.Y) / sc
@@ -2917,7 +2905,7 @@ local function makeDraggable(panel, handle, key)
         -- Preserve the exact visual location before changing the anchor.
         -- Capture the returned parent-local coordinates so the first mouse
         -- movement uses the same coordinate space as panel.Position.
-        local startX, startY = preserveTopLeftBeforeZeroAnchor(panel, sc)
+        local startX, startY = ST.__preserveTopLeftBeforeZeroAnchor(panel, sc)
         cancelActiveDrag()
         -- [FIX-9.37.1-D] The release is detected by the global UI.InputEnded
         -- hook (see below) by comparing the InputObject identity. The old
@@ -2944,7 +2932,7 @@ end
 -- Right edge, bottom edge, and bottom-right corner are supported so the
 -- interaction stays predictable and does not interfere with normal buttons.
 -- ============================================================
-local function makeResizable(panel, key, minW, minH, maxW, maxH)
+ST.__makeResizable = function(panel, key, minW, minH, maxW, maxH)
     if not panel then return end
     minW = math.max(80, tonumber(minW) or 180)
     minH = math.max(60, tonumber(minH) or 90)
@@ -2984,7 +2972,7 @@ local function makeResizable(panel, key, minW, minH, maxW, maxH)
             if not panel.Visible then return end
             local sc = (GUI.uiScale and GUI.uiScale.Scale or 1)
             if not sc or sc <= 0 then sc = 1 end
-            local startX, startY = preserveTopLeftBeforeZeroAnchor(panel, sc)
+            local startX, startY = ST.__preserveTopLeftBeforeZeroAnchor(panel, sc)
             local sw = math.max(1, panel.Size.X.Offset)
             local sh = math.max(1, panel.Size.Y.Offset)
             cancelActiveDrag()
@@ -3034,7 +3022,7 @@ local function makeResizable(panel, key, minW, minH, maxW, maxH)
     end
 end
 
-local function snapActivePanel(ctx)
+ST.__snapActivePanel = function(ctx)
     if not ctx or ctx.mode == "resize" or not S.V39.snapPanels then return end
     if not ctx.panel or not ctx.panel.Parent or not ctx.moved then return end
     local cam = CAM()
@@ -3089,13 +3077,13 @@ hook(UI.InputEnded:Connect(function(inp)
         if ACTIVE_DRAG and inp == ACTIVE_DRAG.input then
             local ctx = ACTIVE_DRAG
             cancelActiveDrag()
-            pcall(snapActivePanel, ctx)
+            pcall(ST.__snapActivePanel, ctx)
             if ctx.onEnd then pcall(ctx.onEnd, ctx) end
         end
     end
 end))
 
-local function applyDraggedPanelPosition(panel, key)
+ST.__applyDraggedPanelPosition = function(panel, key)
     if not panel then return false end
 
     local state = ST.uiPositions[key]
@@ -3290,7 +3278,6 @@ ST.__CGCTX = {
     refreshMainFeaturePills = refreshMainFeaturePills,
     setMenuVisible = setMenuVisible,
     toggleMenuVisibility = toggleMenuVisibility,
-    ctrlHeld = ctrlHeld,
     toggleMasterUIVisibility = toggleMasterUIVisibility,
     LAYOUT_CACHE = LAYOUT_CACHE,
     layoutCacheChanged = layoutCacheChanged,
@@ -3304,11 +3291,11 @@ ST.__CGCTX = {
     sa = sa,
     tb = tb,
     _sharedDragMove = _sharedDragMove,
-    preserveTopLeftBeforeZeroAnchor = preserveTopLeftBeforeZeroAnchor,
+    preserveTopLeftBeforeZeroAnchor = ST.__preserveTopLeftBeforeZeroAnchor,
     makeDraggable = makeDraggable,
-    makeResizable = makeResizable,
-    snapActivePanel = snapActivePanel,
-    applyDraggedPanelPosition = applyDraggedPanelPosition,
+    makeResizable = ST.__makeResizable,
+    snapActivePanel = ST.__snapActivePanel,
+    applyDraggedPanelPosition = ST.__applyDraggedPanelPosition,
     setFeatureToggle = setFeatureToggle,
     toggleFeatureState = toggleFeatureState,
 }
@@ -3359,7 +3346,7 @@ function ST.__defensiveSafeMode(reason)
     return true
 end
 
-local function cg()
+ST.__cg = function()
     local C = ST.__CGCTX
     local gn  = C.rs(16); local mn2 = C.rs(12)
     local sn  = C.rs(12); local bn  = C.rs(12)
@@ -4305,16 +4292,26 @@ local function cg()
             KB = {am=C.S.KB.am, es=C.S.KB.es, sl=C.S.KB.sl, tr=C.S.KB.tr,
                   hold=C.S.KB.hold, feature=C.S.KB.feature, hide=C.S.KB.hide, master=C.S.KB.master,
                   panic=C.S.KB.panic, advanced=C.S.KB.advanced},
-            AM = {on=C.S.AM.on, sm=C.S.AM.sm, md=C.S.AM.md, pd=C.S.AM.pd, tc=C.S.AM.tc, lo=C.S.AM.lo},
-            SL = {on=C.S.SL.on, sm=C.S.SL.sm, md=C.S.SL.md, tc=C.S.SL.tc, pd=C.S.SL.pd, sp=C.S.SL.sp},
-            TR = {on=C.S.TR.on, dl=C.S.TR.dl, md=C.S.TR.md, rd=C.S.TR.rd, tc=C.S.TR.tc, hr=C.S.TR.hr},
-            ES = {on=C.S.ES.on, md=C.S.ES.md, sd=C.S.ES.sd, tc=C.S.ES.tc, ce=col(C.S.ES.ce), ct=col(C.S.ES.ct), name=C.S.ES.name, health=C.S.ES.health, distance=C.S.ES.distance, highlight=C.S.ES.highlight, visibility=C.S.ES.visibility, tracer=C.S.ES.tracer, offscreen=C.S.ES.offscreen, skeleton=C.S.ES.skeleton, status=C.S.ES.status, updateRate=C.S.ES.updateRate, smartCull=C.S.ES.smartCull, distanceFade=C.S.ES.distanceFade, healthbar=C.S.ES.healthbar, depthCheck=C.S.ES.depthCheck, highlightWall=C.S.ES.highlightWall, maxVisible=C.S.ES.maxVisible, espAdvancedMode=C.S.ES.espAdvancedMode, espPreset=C.S.ES.espPreset, box=C.S.ES.box, boxFill=C.S.ES.boxFill, targetGlow=C.S.ES.targetGlow},
+            AM = {on=C.S.AM.on, sm=C.S.AM.sm, md=C.S.AM.md, pd=C.S.AM.pd, tc=C.S.AM.tc, wc=C.S.AM.wc, lo=C.S.AM.lo,
+                  targetPart=C.S.AM.targetPart, priority=C.S.AM.priority, sticky=C.S.AM.sticky,
+                  stickyMargin=C.S.AM.stickyMargin, targetLock=C.S.AM.targetLock,
+                  targetSwitching=C.S.AM.targetSwitching, aliveCheck=C.S.AM.aliveCheck,
+                  sensitivity=C.S.AM.sensitivity, activationMode=C.S.AM.activationMode,
+                  holdMode=C.S.AM.holdMode, whiteAsEnemy=C.S.AM.whiteAsEnemy,
+                  strength=C.S.AM.strength, jitter=C.S.AM.jitter},
+            SL = {on=C.S.SL.on, sm=C.S.SL.sm, md=C.S.SL.md, tc=C.S.SL.tc, wc=C.S.SL.wc, pd=C.S.SL.pd, sp=C.S.SL.sp},
+            TR = {on=C.S.TR.on, dl=C.S.TR.dl, md=C.S.TR.md, rd=C.S.TR.rd, tc=C.S.TR.tc, wc=C.S.TR.wc, hr=C.S.TR.hr},
+            ES = {on=C.S.ES.on, md=C.S.ES.md, sd=C.S.ES.sd, tc=C.S.ES.tc, ce=col(C.S.ES.ce), ct=col(C.S.ES.ct), name=C.S.ES.name, health=C.S.ES.health, distance=C.S.ES.distance, highlight=C.S.ES.highlight, visibility=C.S.ES.visibility, tracer=C.S.ES.tracer, offscreen=C.S.ES.offscreen, skeleton=C.S.ES.skeleton, status=C.S.ES.status, updateRate=C.S.ES.updateRate, smartCull=C.S.ES.smartCull, distanceFade=C.S.ES.distanceFade, healthbar=C.S.ES.healthbar, depthCheck=C.S.ES.depthCheck, highlightWall=C.S.ES.highlightWall, maxVisible=C.S.ES.maxVisible, espAdvancedMode=C.S.ES.espAdvancedMode, espPreset=C.S.ES.espPreset, box=C.S.ES.box, boxFill=C.S.ES.boxFill, targetGlow=C.S.ES.targetGlow, chamsFill=C.S.ES.chamsFill},
             FV = {on=C.S.FV.on, r=C.S.FV.r, c=col(C.S.FV.c), th=C.S.FV.th, fl=C.S.FV.fl, tr=C.S.FV.tr},
-            AC = {nm=C.S.AC.nm, rg=C.S.AC.rg, hz=C.S.AC.hz, cl=C.S.AC.cl, hi=C.S.AC.hi},
+            AC = {nm=C.S.AC.nm, rg=C.S.AC.rg, hz=C.S.AC.hz, cl=C.S.AC.cl, hi=C.S.AC.hi,
+                  ks=C.S.AC.ks, spectatorCheck=C.S.AC.spectatorCheck,
+                  spectatorInterval=C.S.AC.spectatorInterval, acDetect=C.S.AC.acDetect,
+                  acDetectInterval=C.S.AC.acDetectInterval, acThreshold=C.S.AC.acThreshold},
             TP = {on=C.S.TP.on, min=C.S.TP.min, max=C.S.TP.max},
             V39 = {safeMode=C.S.V39.safeMode, watchdog=C.S.V39.watchdog, autoRecover=C.S.V39.autoRecover,
-                   adaptive=C.S.V39.adaptive, diagnostics=C.S.V39.diagnostics, sessionLog=C.S.V39.sessionLog,
-                   maxRecoveries=C.S.V39.maxRecoveries, fpsLow=C.S.V39.fpsLow, fpsMedium=C.S.V39.fpsMedium,
+                   adaptive=C.S.V39.adaptive, diagnostics=C.S.V39.diagnostics,
+                   acSafeTrip=C.S.V39.acSafeTrip, acSafeTripCooldown=C.S.V39.acSafeTripCooldown,
+                   sessionLog=C.S.V39.sessionLog, maxRecoveries=C.S.V39.maxRecoveries, fpsLow=C.S.V39.fpsLow, fpsMedium=C.S.V39.fpsMedium,
                    fpsHigh=C.S.V39.fpsHigh, layoutLocked=C.S.V39.layoutLocked, snapPanels=C.S.V39.snapPanels,
                    profileAutoBackup=C.S.V39.profileAutoBackup, profileAutoMigration=C.S.V39.profileAutoMigration,
                    protection=C.S.V39.protection, detectIntegrity=C.S.V39.detectIntegrity, sanitizeState=C.S.V39.sanitizeState,
@@ -4439,7 +4436,14 @@ local function cg()
             end
         end
 
-        if d.V40 ~= nil and type(d.V40) ~= "table" then return false, "Invalid V40 table" end
+        local sectionNames = {"AM","SL","TR","ES","FV","AC","TP","V39","V40"}
+        for i = 1, #sectionNames do
+            local section = sectionNames[i]
+            if d[section] ~= nil and type(d[section]) ~= "table" then
+                return false, "Invalid " .. section .. " table"
+            end
+        end
+
         if d.V40 then
             local ok, why = boolField(d.V40, "crosshair", "Invalid V40 crosshair")
             if not ok then return false, why end
@@ -4461,6 +4465,22 @@ local function cg()
 
         local ok, why = numRange(d.AM, "sm", 0, 1, "Invalid aim smoothing")
         if not ok then return false, why end
+        ok, why = numRange(d.AM, "md", 100, C.ESP_MAX_RANGE, "Invalid aim max distance")
+        if not ok then return false, why end
+        ok, why = numRange(d.AM, "pd", 0, 1, "Invalid aim prediction")
+        if not ok then return false, why end
+        ok, why = numRange(d.AM, "lo", 0, 1, "Invalid aim lower bound")
+        if not ok then return false, why end
+        ok, why = numRange(d.AM, "stickyMargin", 0, 250, "Invalid sticky margin")
+        if not ok then return false, why end
+        ok, why = numRange(d.AM, "sensitivity", 0.10, 2.00, "Invalid aim sensitivity")
+        if not ok then return false, why end
+        ok, why = numRange(d.AM, "strength", 0, 1, "Invalid aim strength")
+        if not ok then return false, why end
+        ok, why = numRange(d.SL, "md", 100, C.ESP_MAX_RANGE, "Invalid silent max distance")
+        if not ok then return false, why end
+        ok, why = numRange(d.TR, "md", 100, C.ESP_MAX_RANGE, "Invalid trigger max distance")
+        if not ok then return false, why end
         ok, why = numRange(d.ES, "md", 100, C.ESP_MAX_RANGE, "Invalid ESP range")
         if not ok then return false, why end
         ok, why = numRange(d.ES, "sd", 10, C.ESP_MAX_RANGE, "Invalid stealth range")
@@ -4469,6 +4489,60 @@ local function cg()
         if not ok then return false, why end
         ok, why = numRange(d.ES, "maxVisible", 4, 64, "Invalid ESP visible cap")
         if not ok then return false, why end
+
+        local function validateAimSection(tbl, label)
+            if not tbl then return true end
+
+            local targetPart = tbl.targetPart
+            if targetPart ~= nil and type(targetPart) ~= "string" then
+                return false, "Invalid " .. label .. " target part"
+            end
+            if type(targetPart) == "string" then
+                local validTarget = {
+                    Auto=true, AUTO=true, Head=true, UpperTorso=true, HumanoidRootPart=true,
+                    Torso=true, LowerTorso=true,
+                }
+                if not validTarget[targetPart] then return false, "Invalid " .. label .. " target part" end
+            end
+
+            local priority = tbl.priority
+            if priority ~= nil and type(priority) ~= "string" then
+                return false, "Invalid " .. label .. " priority"
+            end
+            if type(priority) == "string" then
+                local validPriority = {
+                    CROSSHAIR=true, DISTANCE=true, LOW_HEALTH=true, NEAREST_VISIBLE=true,
+                }
+                if not validPriority[string.upper(priority)] then return false, "Invalid " .. label .. " priority" end
+            end
+
+            local stickyMargin = tbl.stickyMargin
+            if stickyMargin ~= nil then
+                local n = tonumber(stickyMargin)
+                if not n or n ~= n or n < 0 or n > 250 then
+                    return false, "Invalid " .. label .. " sticky margin"
+                end
+            end
+
+            local activationMode = tbl.activationMode
+            if activationMode ~= nil and type(activationMode) ~= "string" then
+                return false, "Invalid " .. label .. " activation mode"
+            end
+            if type(activationMode) == "string" then
+                local mode = string.upper(activationMode)
+                if mode ~= "HOLD" and mode ~= "TOGGLE" then
+                    return false, "Invalid " .. label .. " activation mode"
+                end
+            end
+
+            return true
+        end
+
+        local okAim, whyAim = validateAimSection(d.AM, "aim")
+        if not okAim then return false, whyAim end
+        local okV40Aim, whyV40Aim = validateAimSection(d.V40, "V40")
+        if not okV40Aim then return false, whyV40Aim end
+
         if d.V39 then
             ok, why = numRange(d.V39, "protectionInterval", 0.5, 5, "Invalid protection interval")
             if not ok then return false, why end
@@ -4810,16 +4884,29 @@ local function cg()
         if not encoded then return false, "JSON encode failed" end
         if C.S.V39.profileAutoBackup then fcBackupCurrent() end
         local tmpPath = FC_PATH .. ".tmp"
+        local function cleanupTempProfile()
+            if type(delfile) == "function" then
+                pcall(function() delfile(tmpPath) end)
+            end
+        end
         local okTmp, errTmp = pcall(function() writefile(tmpPath, encoded) end)
-        if not okTmp then return false, tostring(errTmp) end
+        if not okTmp then
+            cleanupTempProfile()
+            return false, tostring(errTmp)
+        end
         local okVerify, rawVerify = pcall(function() return readfile(tmpPath) end)
-        if not okVerify or rawVerify ~= encoded then return false, "Profile verification failed" end
+        if not okVerify or rawVerify ~= encoded then
+            cleanupTempProfile()
+            return false, "Profile verification failed"
+        end
         local ok, err = pcall(function() writefile(FC_PATH, encoded) end)
         if ok then
-            if type(delfile) == "function" then pcall(function() delfile(tmpPath) end) end
+            cleanupTempProfile()
             ST.fcStats.profileSaves=(ST.fcStats.profileSaves or 0)+1
             ST.v39.profileLastSave=os.clock(); ST.v39.profileDirty=false; ST.v39.profileDirtyReason=""
             C.v39SetHealth("CONFIG","READY","Profile saved")
+        else
+            cleanupTempProfile()
         end
         return ok, ok and "Profile saved" or tostring(err)
     end
@@ -4875,6 +4962,11 @@ local function cg()
         return true, "Profile loaded"
     end
     local function fcReset()
+        -- Restore any camera zoom owned by Third Person before resetting the
+        -- configuration table. This prevents Reset Settings from leaving the
+        -- user's camera zoom stuck at the feature's values.
+        pcall(C.setThirdPerson, false)
+
         C.S.KB = {am="F1", es="F2", sl="F3", tr="F4", hold="F5", feature="F6", hide="F7", master="F8", panic="F9", advanced="F10"}
         C.S.AM = {on=false, sm=0.35, md=1000, pd=0.06, tc=true, wc=true, lo=0.12,
             targetPart="Head", priority="CROSSHAIR", sticky=true, stickyMargin=45,
@@ -4896,19 +4988,33 @@ local function cg()
             acSafeTrip=true, acSafeTripCooldown=30, sessionLog=true, maxRecoveries=3, fpsLow=25, fpsMedium=40,
             fpsHigh=60, layoutLocked=false, snapPanels=true, profileAutoBackup=true, profileAutoMigration=true,
             protection=true, detectIntegrity=true, sanitizeState=true, protectionInterval=1.0, protectionFaultLimit=3}
-        C.S.V40 = {targetPart="Head", priority="CROSSHAIR", sticky=true, stickyMargin=45,
+
+        -- Preserve the V40 table identity because setupV40 captures it as a
+        -- local STATE reference. Replacing S.V40 would leave the live Advanced
+        -- Suite pointing at the old table after a reset.
+        local v40 = C.S.V40
+        local v40Defaults = {
+            targetPart="Head", priority="CROSSHAIR", sticky=true, stickyMargin=45,
             crosshair=false, crosshairDot=false, crosshairDynamic=false, crosshairOutline=true, crosshairOpacity=1.0,
             crosshairSize=7, crosshairGap=5, crosshairThickness=1.5, espPreset="CUSTOM", performance="BALANCED",
             fpsGuard=true, fpsFloor=30, lightweight=false, targetScanRate=120, uiUpdateRate=30,
             uiScale=1.0, compactMode=false, uiSpacing=6, transparency=0.03, theme="MIDNIGHT", notify=true,
-            layout="STANDARD", runtimePaused=false, suiteVisible=false, autoProfileBackup=true}
+            layout="STANDARD", runtimePaused=false, suiteVisible=false, autoProfileBackup=true
+        }
+        if type(v40) == "table" then
+            for key in pairs(v40) do v40[key] = nil end
+            for key, value in pairs(v40Defaults) do v40[key] = value end
+        else
+            C.S.V40 = v40Defaults
+        end
+
         C.S.AM.targetPart="Head"; C.S.AM.priority="CROSSHAIR"; C.S.AM.sticky=true; C.S.AM.stickyMargin=45
         C.S.ES.espPreset="CUSTOM"; C.S.ES.smartCull=true; C.S.ES.distanceFade=true; C.S.ES.healthbar=false; C.S.ES.depthCheck=true
         ST.v39.safeMode=false; ST.v39.safeReason=""; ST.v39.recoveryCount=0; ST.v39.performanceState="BALANCED"
         ST.v39.lastRecoveryName=""; ST.v39.lastRecoveryT=0; ST.v39.overloadScore=0; ST.v39.frameMs=0; ST.v39.frameMsEMA=0
         ST.v39.protectLastMs=0; ST.v39.protectSlow=0; ST.v39.protectFaults=0; ST.v39.protectRepairs=0; ST.v39.protectChecks=0; ST.v39.protectStatus="READY"; ST.v39.protectLast=""
-        if type(_G.__V94OPSYX_V40_REFRESH)=="function" then pcall(_G.__V94OPSYX_V40_REFRESH) end
         FC_ADAPTIVE = true
+        ST._fcAdaptive = true
         holdToAimEnabled = false
         aiming = false
         ST.arm = false; ST.htArm = false; ST.holdReleased = false; ST.holdReleaseT = 0
@@ -5596,7 +5702,7 @@ end
 -- ============================================================
 -- MAIN LOOP
 -- ============================================================
-ST._okCg, ST._errCg = pcall(cg)
+ST._okCg, ST._errCg = pcall(ST.__cg)
 if not ST._okCg then warn("[OPSYX] GUI init error: " .. tostring(ST._errCg)) end
 ST._okCg, ST._errCg = nil, nil
 ST.__CGCTX = nil -- release packed constructor references after GUI initialization
@@ -5607,7 +5713,7 @@ ST.__CGCTX = nil -- release packed constructor references after GUI initializati
 -- owns the entire layout now; this section only adds missing ESP/session
 -- controls into the same deterministic grid.
 -- ============================================================
-local function buildFeatureCenterCleanControls()
+ST.__buildFeatureCenterCleanControls = function()
     local FC = GUI.featureCenter
     if FC then
         -- Find the actual bottom of the existing Feature Center controls first.
@@ -5720,7 +5826,7 @@ local function buildFeatureCenterCleanControls()
     end
 end
 
-buildFeatureCenterCleanControls()
+ST.__buildFeatureCenterCleanControls()
 
 -- ============================================================
 -- UI ALIGNMENT PASS
@@ -5842,9 +5948,9 @@ layoutRightDock = function(force)
         --
         -- A panel that has been manually dragged is excluded from this
         -- automatic placement and gets its saved position instead.
-        local mainDragged = applyDraggedPanelPosition(main, "main")
-        local igDragged   = ig and applyDraggedPanelPosition(ig, "ignore") or false
-        local setDragged  = setp and applyDraggedPanelPosition(setp, "settings") or false
+        local mainDragged = ST.__applyDraggedPanelPosition(main, "main")
+        local igDragged   = ig and ST.__applyDraggedPanelPosition(ig, "ignore") or false
+        local setDragged  = setp and ST.__applyDraggedPanelPosition(setp, "settings") or false
 
         if neededW <= availableW then
             local cursor = right
@@ -5955,7 +6061,7 @@ layoutRightDock = function(force)
         -- Once dragged, its saved top-left position takes precedence.
         if GUI.mobilePanel then
             local mp = GUI.mobilePanel
-            local dragged = applyDraggedPanelPosition(mp, "mobile")
+            local dragged = ST.__applyDraggedPanelPosition(mp, "mobile")
             local mpW = mp.Size.X.Offset
             local mpH = mp.Size.Y.Offset
             local safeW = math.max(1, lw - right)
@@ -9274,6 +9380,10 @@ ST.setupV40 = function()
             if not parent then return false end
 
             if not crossGui or not crossGui.Parent then
+                if crossGui and not crossGui.Parent then
+                    untrackOwnedGui(crossGui)
+                    crossGui = nil
+                end
                 local ok, fresh = pcall(function()
                     local g = Instance.new("ScreenGui")
                     g.Name = rs(10)
@@ -9344,6 +9454,15 @@ ST.setupV40 = function()
             if d then pcall(function() d.Visible = false end) end
         end
 
+        local function untrackOwnedGui(gui)
+            if not gui or not ST.ourGuis then return end
+            for i = #ST.ourGuis, 1, -1 do
+                if ST.ourGuis[i] == gui then
+                    table.remove(ST.ourGuis, i)
+                end
+            end
+        end
+
         destroyCrosshair = function()
             for i = 1, #crossLines do
                 pcall(function() crossLines[i]:Remove() end)
@@ -9363,7 +9482,9 @@ ST.setupV40 = function()
             drawingDotOutline = nil
             hideGuiCrosshair()
             if crossGui then
-                pcall(function() crossGui:Destroy() end)
+                local oldGui = crossGui
+                untrackOwnedGui(oldGui)
+                pcall(function() oldGui:Destroy() end)
                 crossGui = nil
             end
             guiCross = {}
@@ -9626,7 +9747,7 @@ ST.setupV40 = function()
         end
 
         copyConfig = function()
-            local ok, raw = pcall(function() return HttpService:JSONEncode({version="9.41.1", V40=STATE, KB=S.KB, AM={sm=S.AM.sm,pd=S.AM.pd,md=S.AM.md,targetPart=S.AM.targetPart,priority=S.AM.priority,sticky=S.AM.sticky,stickyMargin=S.AM.stickyMargin,targetLock=S.AM.targetLock,targetSwitching=S.AM.targetSwitching,aliveCheck=S.AM.aliveCheck,sensitivity=S.AM.sensitivity,activationMode=S.AM.activationMode,holdMode=S.AM.holdMode}, ES={name=S.ES.name,health=S.ES.health,distance=S.ES.distance,highlight=S.ES.highlight,visibility=S.ES.visibility,tracer=S.ES.tracer,offscreen=S.ES.offscreen,skeleton=S.ES.skeleton,status=S.ES.status,updateRate=S.ES.updateRate,smartCull=S.ES.smartCull,distanceFade=S.ES.distanceFade,healthbar=S.ES.healthbar,depthCheck=S.ES.depthCheck,highlightWall=S.ES.highlightWall,maxVisible=S.ES.maxVisible,espAdvancedMode=S.ES.espAdvancedMode,espPreset=S.ES.espPreset,box=S.ES.box,boxFill=S.ES.boxFill,targetGlow=S.ES.targetGlow}}) end)
+            local ok, raw = pcall(function() return HttpService:JSONEncode({version="9.41.1", V40=STATE, KB=S.KB, AM={on=S.AM.on,sm=S.AM.sm,md=S.AM.md,pd=S.AM.pd,tc=S.AM.tc,wc=S.AM.wc,lo=S.AM.lo,targetPart=S.AM.targetPart,priority=S.AM.priority,sticky=S.AM.sticky,stickyMargin=S.AM.stickyMargin,targetLock=S.AM.targetLock,targetSwitching=S.AM.targetSwitching,aliveCheck=S.AM.aliveCheck,sensitivity=S.AM.sensitivity,activationMode=S.AM.activationMode,holdMode=S.AM.holdMode,whiteAsEnemy=S.AM.whiteAsEnemy,strength=S.AM.strength,jitter=S.AM.jitter}, ES={name=S.ES.name,health=S.ES.health,distance=S.ES.distance,highlight=S.ES.highlight,visibility=S.ES.visibility,tracer=S.ES.tracer,offscreen=S.ES.offscreen,skeleton=S.ES.skeleton,status=S.ES.status,updateRate=S.ES.updateRate,smartCull=S.ES.smartCull,distanceFade=S.ES.distanceFade,healthbar=S.ES.healthbar,depthCheck=S.ES.depthCheck,highlightWall=S.ES.highlightWall,maxVisible=S.ES.maxVisible,espAdvancedMode=S.ES.espAdvancedMode,espPreset=S.ES.espPreset,box=S.ES.box,boxFill=S.ES.boxFill,targetGlow=S.ES.targetGlow}}) end)
             if not ok or not raw then notify("Config encode failed");return end
             if type(setclipboard) ~= "function" then notify("Clipboard unavailable");return end
             local okClip = pcall(function() setclipboard(raw) end)
@@ -9641,9 +9762,13 @@ ST.setupV40 = function()
             if type(data.V40) == "table" then for k,v in pairs(data.V40) do if STATE[k] ~= nil and type(v) == type(STATE[k]) then STATE[k]=v end end end
             if type(data.KB) == "table" then S.KB = sanitizeKeybindTable(data.KB) end
             if type(data.AM) == "table" then
+                if type(data.AM.on)=="boolean" then S.AM.on=data.AM.on end
                 if tonumber(data.AM.sm) then S.AM.sm=cl(tonumber(data.AM.sm),0,1) end
                 if tonumber(data.AM.pd) then S.AM.pd=cl(tonumber(data.AM.pd),0,1) end
                 if tonumber(data.AM.md) then S.AM.md=cl(tonumber(data.AM.md),100,ESP_MAX_RANGE) end
+                if type(data.AM.tc)=="boolean" then S.AM.tc=data.AM.tc end
+                if type(data.AM.wc)=="boolean" then S.AM.wc=data.AM.wc end
+                if tonumber(data.AM.lo) then S.AM.lo=cl(tonumber(data.AM.lo),0,1) end
                 if type(data.AM.targetPart)=="string" then S.AM.targetPart=tostring(data.AM.targetPart) end
                 if type(data.AM.priority)=="string" then S.AM.priority=tostring(data.AM.priority):upper() end
                 if type(data.AM.sticky)=="boolean" then S.AM.sticky=data.AM.sticky end
@@ -9657,6 +9782,9 @@ ST.setupV40 = function()
                     if mode=="HOLD" or mode=="TOGGLE" then S.AM.activationMode=mode end
                 end
                 if type(data.AM.holdMode)=="boolean" then S.AM.holdMode=data.AM.holdMode end
+                if type(data.AM.whiteAsEnemy)=="boolean" then S.AM.whiteAsEnemy=data.AM.whiteAsEnemy end
+                if tonumber(data.AM.strength) then S.AM.strength=cl(tonumber(data.AM.strength),0,1) end
+                if type(data.AM.jitter)=="boolean" then S.AM.jitter=data.AM.jitter end
             end
             if type(data.ES) == "table" then for _,k in ipairs({"name","health","distance","highlight","visibility","tracer","offscreen","skeleton","status","smartCull","distanceFade","healthbar","depthCheck","highlightWall","box","boxFill","targetGlow"}) do if type(data.ES[k])=="boolean" then S.ES[k]=data.ES[k] end end;if tonumber(data.ES.updateRate) then S.ES.updateRate=cl(tonumber(data.ES.updateRate),3,30) end; if tonumber(data.ES.maxVisible) then S.ES.maxVisible=math.floor(cl(tonumber(data.ES.maxVisible),4,64)+0.5) end; if type(data.ES.espAdvancedMode)=="string" then S.ES.espAdvancedMode=tostring(data.ES.espAdvancedMode):upper() end; if type(data.ES.espPreset)=="string" then S.ES.espPreset=tostring(data.ES.espPreset):upper() end end
             applySync();applyTheme(STATE.theme);applyLayout(STATE.layout)
@@ -9666,7 +9794,7 @@ ST.setupV40 = function()
         end
         exportFile = function()
             if type(writefile) ~= "function" then notify("File export unavailable");return end
-            local ok, raw=pcall(function() return HttpService:JSONEncode({version="9.41.1",V40=STATE,KB=S.KB,AM={sm=S.AM.sm,pd=S.AM.pd,md=S.AM.md,targetPart=S.AM.targetPart,priority=S.AM.priority,sticky=S.AM.sticky,stickyMargin=S.AM.stickyMargin,targetLock=S.AM.targetLock,targetSwitching=S.AM.targetSwitching,aliveCheck=S.AM.aliveCheck,sensitivity=S.AM.sensitivity,activationMode=S.AM.activationMode,holdMode=S.AM.holdMode},ES={name=S.ES.name,health=S.ES.health,distance=S.ES.distance,highlight=S.ES.highlight,visibility=S.ES.visibility,tracer=S.ES.tracer,offscreen=S.ES.offscreen,skeleton=S.ES.skeleton,status=S.ES.status,updateRate=S.ES.updateRate,smartCull=S.ES.smartCull,distanceFade=S.ES.distanceFade,healthbar=S.ES.healthbar,depthCheck=S.ES.depthCheck,highlightWall=S.ES.highlightWall,maxVisible=S.ES.maxVisible,espAdvancedMode=S.ES.espAdvancedMode,espPreset=S.ES.espPreset,box=S.ES.box,boxFill=S.ES.boxFill,targetGlow=S.ES.targetGlow}}) end)
+            local ok, raw=pcall(function() return HttpService:JSONEncode({version="9.41.1",V40=STATE,KB=S.KB,AM={on=S.AM.on,sm=S.AM.sm,md=S.AM.md,pd=S.AM.pd,tc=S.AM.tc,wc=S.AM.wc,lo=S.AM.lo,targetPart=S.AM.targetPart,priority=S.AM.priority,sticky=S.AM.sticky,stickyMargin=S.AM.stickyMargin,targetLock=S.AM.targetLock,targetSwitching=S.AM.targetSwitching,aliveCheck=S.AM.aliveCheck,sensitivity=S.AM.sensitivity,activationMode=S.AM.activationMode,holdMode=S.AM.holdMode,whiteAsEnemy=S.AM.whiteAsEnemy,strength=S.AM.strength,jitter=S.AM.jitter},ES={name=S.ES.name,health=S.ES.health,distance=S.ES.distance,highlight=S.ES.highlight,visibility=S.ES.visibility,tracer=S.ES.tracer,offscreen=S.ES.offscreen,skeleton=S.ES.skeleton,status=S.ES.status,updateRate=S.ES.updateRate,smartCull=S.ES.smartCull,distanceFade=S.ES.distanceFade,healthbar=S.ES.healthbar,depthCheck=S.ES.depthCheck,highlightWall=S.ES.highlightWall,maxVisible=S.ES.maxVisible,espAdvancedMode=S.ES.espAdvancedMode,espPreset=S.ES.espPreset,box=S.ES.box,boxFill=S.ES.boxFill,targetGlow=S.ES.targetGlow}}) end)
             if not ok or not raw then notify("Export encode failed");return end
             local okW=pcall(function() writefile("OPSYX_V9_41_Advanced.json",raw) end);notify(okW and "Config exported" or "Export failed")
         end
@@ -9901,13 +10029,13 @@ ST.setupV40()
 -- resize handles after the suite has fully initialized.
 -- ============================================================
 pcall(function()
-    makeResizable(GUI.main, "main", 480, 130, 900, 360)
-    makeResizable(GUI.igPanel, "ignore", 280, 300, 560, 760)
-    makeResizable(GUI.setPanel, "settings", 300, 320, 620, 700)
-    makeResizable(GUI.featureCenter, "featureCenter", 560, 620, 760, 740)
-    makeResizable(GUI.mobilePanel, "mobile", 160, 300, 420, 760)
-    makeResizable(GUI.advancedSuite, "advancedSuite", 420, 360, 760, 600)
-    makeResizable(GUI.restoreBar, "restoreBar", 170, 34, 420, 90)
+    C.makeResizable(GUI.main, "main", 480, 130, 900, 360)
+    C.makeResizable(GUI.igPanel, "ignore", 280, 300, 560, 760)
+    C.makeResizable(GUI.setPanel, "settings", 300, 320, 620, 700)
+    C.makeResizable(GUI.featureCenter, "featureCenter", 560, 620, 760, 740)
+    C.makeResizable(GUI.mobilePanel, "mobile", 160, 300, 420, 760)
+    C.makeResizable(GUI.advancedSuite, "advancedSuite", 420, 360, 760, 600)
+    C.makeResizable(GUI.restoreBar, "restoreBar", 170, 34, 420, 90)
 
 end)
 
