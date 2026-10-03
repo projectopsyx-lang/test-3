@@ -1,5 +1,5 @@
 -- ============================================================
--- RE-EXECUTION GUARD 1
+-- RE-EXECUTION GUARD 25
 -- If OPSYX is already running, unload the previous instance first
 -- so the new execution starts cleanly without duplicate UI/connections.
 -- ============================================================
@@ -383,6 +383,12 @@ end
 local function enforceThirdPerson()
     if not S.TP.on then return end
     pcall(function()
+        -- If enforcement is the first path that applies Third Person, capture
+        -- the user's original zoom before overwriting it. Without this guard,
+        -- a later disable could have no saved values to restore.
+        if not TP_STATE.applied then
+            TP_STATE.savedMin, TP_STATE.savedMax = getCameraZoom()
+        end
         local minZoom = math.max(1, tonumber(S.TP.min) or 6)
         local maxZoom = math.max(minZoom + 1, tonumber(S.TP.max) or 14)
         ME.CameraMinZoomDistance = minZoom
@@ -956,12 +962,20 @@ local function al(c)
     if not c then return false end
     local h = HUM_CACHE[c]
     if h ~= nil then
-        if h.Parent == nil or h.Parent ~= c then HUM_CACHE[c] = nil
-        else return h.Health > 0 end
+        local health = tonumber(h.Health)
+        if h.Parent == nil or h.Parent ~= c or not health or health <= 0 then
+            HUM_CACHE[c] = nil
+        else
+            return true
+        end
     end
     h = c:FindFirstChildOfClass("Humanoid")
-    if h then HUM_CACHE[c] = h end
-    return h ~= nil and h.Health > 0
+    if h then
+        local health = tonumber(h.Health)
+        if health and health > 0 then HUM_CACHE[c] = h end
+        return health and health > 0 or false
+    end
+    return false
 end
 
 -- ============================================================
@@ -1255,7 +1269,7 @@ local function findTarget(fov, md, tc, wc, useCenter)
     local switchThr2 = switchThr * switchThr
     local mode = tostring(S.AM.priority or "CROSSHAIR"):upper()
 
-    local bestPart, bestAimPart, bestPl, bestAimName = nil, nil, nil, "?"
+    local bestAimPart, bestPl, bestAimName = nil, nil, "?"
     local bestDist2, bestScore = math.huge, math.huge
 
     for i = 1, SCAN.n do
@@ -1299,7 +1313,6 @@ local function findTarget(fov, md, tc, wc, useCenter)
                     if score < bestScore then
                         bestScore = score
                         bestDist2 = d2
-                        bestPart = e.p
                         bestAimPart = e.aimP
                         bestPl = e.pl
                         bestAimName = e.aimName
@@ -1453,19 +1466,27 @@ local function espCharacterState(pl)
     local hum = HUM_CACHE[c]
     -- [FIX-9.37.1-E] Identity check (hum.Parent == c) in addition to the
     -- existing nil-Parent eviction, mirroring the al() fix.
-    if hum ~= nil and (hum.Parent == nil or hum.Parent ~= c) then
-        HUM_CACHE[c] = nil
-        hum = nil
+    if hum ~= nil then
+        local cachedHealth = tonumber(hum.Health)
+        if hum.Parent == nil or hum.Parent ~= c or not cachedHealth or cachedHealth <= 0 then
+            HUM_CACHE[c] = nil
+            hum = nil
+        end
     end
     if not hum then
         hum = c:FindFirstChildOfClass("Humanoid")
         -- [FIX-9.45-B] Only cache when the fresh humanoid is alive.
-        -- A dead-but-still-parented humanoid must not re-populate HUM_CACHE,
-        -- as that would silently undo the [FIX-9.44-G] Health<=0 eviction
-        -- on the very next espCharacterState() call.
-        if hum and hum.Health > 0 then HUM_CACHE[c] = hum end
+        -- A dead-but-still-parented humanoid must not re-populate HUM_CACHE.
+        if hum then
+            local health = tonumber(hum.Health)
+            if health and health > 0 then
+                HUM_CACHE[c] = hum
+            else
+                return false, c, nil, nil
+            end
+        end
     end
-    if not hum or hum.Health <= 0 then return false, c, nil, nil end
+    if not hum then return false, c, nil, nil end
     local root = fr(c)
     if not root then return false, c, hum, nil end
     return true, c, hum, root
@@ -1848,6 +1869,22 @@ local function refreshMainFeaturePills()
     updBtn("HOLD AIM", holdToAimEnabled, C_GRN, C_ORG)
 end
 
+-- Centralized rebind cancellation keeps the visible button synchronized when
+-- a panel closes, another panel opens, or cleanup runs during key capture.
+local function cancelKeyRebind()
+    local rb = ST._rb
+    if not rb then return false end
+    pcall(function()
+        if rb.btn and rb.btn.Parent then
+            rb.btn.Text = rb.old or "NONE"
+            rb.btn.TextColor3 = UI_ACTIVE
+            rb.btn.AutoButtonColor = false
+        end
+    end)
+    ST._rb = nil
+    return true
+end
+
 function ST.__closeAuxPanels(except)
     local keep = tostring(except or "none")
     if GUI.igPanel and keep ~= "ignore" then GUI.igPanel.Visible = false end
@@ -1865,7 +1902,7 @@ function ST.__closeAuxPanels(except)
     cancelActiveDrag()
     SI.dragging = false
     SI.pointerX = nil
-    ST._rb = nil
+    cancelKeyRebind()
 end
 
 local function getVisibleAuxPanel()
@@ -2171,13 +2208,7 @@ end
 
 local function toggleKeysPanel()
     if not GUI.setPanel then return end
-    if ST._rb and ST._rb.btn then
-        pcall(function()
-            ST._rb.btn.Text = ST._rb.old or "NONE"
-            ST._rb.btn.TextColor3 = UI_ACTIVE
-        end)
-        ST._rb = nil
-    end
+    cancelKeyRebind()
     ST.mn = not ST.mn
     if ST.mn then
         ST.__closeAuxPanels("settings")
@@ -2192,12 +2223,7 @@ end
 -- Settings panel and the V9.41.1 Advanced Suite.
 local function beginKeyRebind(btn, keyName)
     if not btn or not keyName then return end
-    if ST._rb and ST._rb.btn then
-        pcall(function()
-            ST._rb.btn.Text = ST._rb.old or "NONE"
-            ST._rb.btn.TextColor3 = UI_ACTIVE
-        end)
-    end
+    cancelKeyRebind()
     ST._rb = {btn=btn, key=keyName, old=S.KB[keyName]}
     btn.Text = "[ PRESS ANY KEY ]"
     btn.TextColor3 = Color3.fromRGB(255,220,110)
@@ -2510,8 +2536,11 @@ local function doAimbot(dt)
 
     local sp, on = cam:WorldToViewportPoint(pos)
     if not on then return end
-    local cx, cy = cam.ViewportSize.X/2, cam.ViewportSize.Y/2
-    local dx, dy = sp.X-cx, sp.Y-cy
+    -- Target selection and the FOV indicator use the actual mouse position
+    -- on mouse-capable devices. Using viewport center here made the output
+    -- pull toward the wrong origin whenever the cursor was not centered.
+    local mp = UI:GetMouseLocation()
+    local dx, dy = sp.X-mp.X, sp.Y-mp.Y
     local d      = math.sqrt(dx*dx + dy*dy)
 
     -- [IMPROVE-AIM-DEADZONE] Deadzone now scales with the target's screen
@@ -3308,20 +3337,21 @@ ST.__CGCTX = {
 local C = ST.__CGCTX
 
 function ST.__defensiveSafeMode(reason)
-    if ST.v39.safeMode or S.V39.safeMode then
-        ST.v39.safeMode = true
-        S.V39.safeMode = true
-        return false
-    end
-
+    local wasSafe = ST.v39.safeMode or S.V39.safeMode
     local why = tostring(reason or "Safe mode")
+    local now = os.clock()
+
     ST.v39.safeMode = true
     S.V39.safeMode = true
-    ST.v39.safeReason = why
-    ST.v39.safeEnteredT = os.clock()
+    if ST.v39.safeReason == "" then ST.v39.safeReason = why end
+    if not ST.v39.safeEnteredT or ST.v39.safeEnteredT <= 0 then
+        ST.v39.safeEnteredT = now
+    end
 
     -- Preserve configured S.* feature state. Safe Mode gates execution rather
-    -- than rewriting the user's selected feature settings.
+    -- than rewriting the user's selected feature settings. Runtime disarming
+    -- is performed on every call so a profile that already marks itself SAFE
+    -- cannot skip the actual safety transition.
     aiming = false
     ST.arm = false
     ST.saArm = false
@@ -3331,19 +3361,25 @@ function ST.__defensiveSafeMode(reason)
     ST.tbPending = false
     ST.tbPendingAt = 0
     ST.saToken = (ST.saToken or 0) + 1
+    pcall(cancelKeyRebind)
     pcall(cancelActiveDrag)
     pcall(flushTarget)
     pcall(destroyAllInstanceESP)
 
-    v39Recovery("SAFE_MODE: " .. why)
+    if not wasSafe then
+        v39Recovery("SAFE_MODE: " .. why)
+        v39Log("SAFE_MODE", "entered: " .. why)
+    end
     v39SetHealth("AIMBOT", "SAFE", why)
     v39SetHealth("ESP", "SAFE", why)
     v39SetHealth("SILENT", "SAFE", why)
     v39SetHealth("TRIGGER", "SAFE", why)
     v39SetHealth("WATCHDOG", "SAFE", why)
-    v39Log("SAFE_MODE", "entered: " .. why)
-    if GUI.featureCenter then GUI.featureCenter.Visible = true end
-    return true
+    if GUI.featureCenter then
+        GUI.featureCenter.Visible = true
+        ST.fcOpen = true
+    end
+    return not wasSafe
 end
 
 ST.__cg = function()
@@ -5261,12 +5297,7 @@ ST._okIn, ST._errIn = pcall(function()
             -- Escape cancels capture; Delete clears the binding. Backspace is
             -- intentionally bindable like every other keyboard key.
             if inp.KeyCode == Enum.KeyCode.Escape then
-                pcall(function()
-                    rb.btn.Text = rb.old or "NONE"
-                    rb.btn.TextColor3 = UI_ACTIVE
-                    rb.btn.AutoButtonColor = false
-                end)
-                ST._rb = nil
+                cancelKeyRebind()
                 return
             elseif inp.KeyCode == Enum.KeyCode.Delete then
                 nn = ""
@@ -6132,6 +6163,7 @@ function ST.__runtimeGuardReset()
         ST.RUNTIME_GUARD.count = 0
         ST.RUNTIME_GUARD.windowT = now
         ST.RUNTIME_GUARD.lastError = ""
+        ST.RUNTIME_GUARD.tripped = false
     end
 end
 
@@ -7469,6 +7501,8 @@ hook(Players.PlayerRemoving:Connect(function(pl)
     removePlayerFromList(pl)
     invalidateTargetTeam(pl)
     invalidateESP(pl)
+    -- Generation counters are player-keyed state; remove the player key after
+    -- invalidation so high-churn servers cannot grow ESP_GEN without bound.
     ESP_GEN[pl] = nil
     ESP_TEAM_CACHE[pl] = nil
     LP[pl]=nil; IGNORE[pl]=nil
@@ -9747,7 +9781,7 @@ ST.setupV40 = function()
         end
 
         copyConfig = function()
-            local ok, raw = pcall(function() return HttpService:JSONEncode({version="9.41.1", V40=STATE, KB=S.KB, AM={on=S.AM.on,sm=S.AM.sm,md=S.AM.md,pd=S.AM.pd,tc=S.AM.tc,wc=S.AM.wc,lo=S.AM.lo,targetPart=S.AM.targetPart,priority=S.AM.priority,sticky=S.AM.sticky,stickyMargin=S.AM.stickyMargin,targetLock=S.AM.targetLock,targetSwitching=S.AM.targetSwitching,aliveCheck=S.AM.aliveCheck,sensitivity=S.AM.sensitivity,activationMode=S.AM.activationMode,holdMode=S.AM.holdMode,whiteAsEnemy=S.AM.whiteAsEnemy,strength=S.AM.strength,jitter=S.AM.jitter}, ES={name=S.ES.name,health=S.ES.health,distance=S.ES.distance,highlight=S.ES.highlight,visibility=S.ES.visibility,tracer=S.ES.tracer,offscreen=S.ES.offscreen,skeleton=S.ES.skeleton,status=S.ES.status,updateRate=S.ES.updateRate,smartCull=S.ES.smartCull,distanceFade=S.ES.distanceFade,healthbar=S.ES.healthbar,depthCheck=S.ES.depthCheck,highlightWall=S.ES.highlightWall,maxVisible=S.ES.maxVisible,espAdvancedMode=S.ES.espAdvancedMode,espPreset=S.ES.espPreset,box=S.ES.box,boxFill=S.ES.boxFill,targetGlow=S.ES.targetGlow}}) end)
+            local ok, raw = pcall(function() return HttpService:JSONEncode({version="9.41.1", V40=STATE, KB=S.KB, AM={on=S.AM.on,sm=S.AM.sm,md=S.AM.md,pd=S.AM.pd,tc=S.AM.tc,wc=S.AM.wc,lo=S.AM.lo,targetPart=S.AM.targetPart,priority=S.AM.priority,sticky=S.AM.sticky,stickyMargin=S.AM.stickyMargin,targetLock=S.AM.targetLock,targetSwitching=S.AM.targetSwitching,aliveCheck=S.AM.aliveCheck,sensitivity=S.AM.sensitivity,activationMode=S.AM.activationMode,holdMode=S.AM.holdMode,whiteAsEnemy=S.AM.whiteAsEnemy,strength=S.AM.strength,jitter=S.AM.jitter}, ES={on=S.ES.on,md=S.ES.md,sd=S.ES.sd,tc=S.ES.tc,ce={math.floor(S.ES.ce.R*255+0.5),math.floor(S.ES.ce.G*255+0.5),math.floor(S.ES.ce.B*255+0.5)},ct={math.floor(S.ES.ct.R*255+0.5),math.floor(S.ES.ct.G*255+0.5),math.floor(S.ES.ct.B*255+0.5)},name=S.ES.name,health=S.ES.health,distance=S.ES.distance,highlight=S.ES.highlight,visibility=S.ES.visibility,tracer=S.ES.tracer,offscreen=S.ES.offscreen,skeleton=S.ES.skeleton,status=S.ES.status,updateRate=S.ES.updateRate,smartCull=S.ES.smartCull,distanceFade=S.ES.distanceFade,healthbar=S.ES.healthbar,depthCheck=S.ES.depthCheck,highlightWall=S.ES.highlightWall,maxVisible=S.ES.maxVisible,espAdvancedMode=S.ES.espAdvancedMode,espPreset=S.ES.espPreset,box=S.ES.box,boxFill=S.ES.boxFill,targetGlow=S.ES.targetGlow,chamsFill=S.ES.chamsFill}}) end)
             if not ok or not raw then notify("Config encode failed");return end
             if type(setclipboard) ~= "function" then notify("Clipboard unavailable");return end
             local okClip = pcall(function() setclipboard(raw) end)
@@ -9786,7 +9820,19 @@ ST.setupV40 = function()
                 if tonumber(data.AM.strength) then S.AM.strength=cl(tonumber(data.AM.strength),0,1) end
                 if type(data.AM.jitter)=="boolean" then S.AM.jitter=data.AM.jitter end
             end
-            if type(data.ES) == "table" then for _,k in ipairs({"name","health","distance","highlight","visibility","tracer","offscreen","skeleton","status","smartCull","distanceFade","healthbar","depthCheck","highlightWall","box","boxFill","targetGlow"}) do if type(data.ES[k])=="boolean" then S.ES[k]=data.ES[k] end end;if tonumber(data.ES.updateRate) then S.ES.updateRate=cl(tonumber(data.ES.updateRate),3,30) end; if tonumber(data.ES.maxVisible) then S.ES.maxVisible=math.floor(cl(tonumber(data.ES.maxVisible),4,64)+0.5) end; if type(data.ES.espAdvancedMode)=="string" then S.ES.espAdvancedMode=tostring(data.ES.espAdvancedMode):upper() end; if type(data.ES.espPreset)=="string" then S.ES.espPreset=tostring(data.ES.espPreset):upper() end end
+            if type(data.ES) == "table" then
+                if type(data.ES.on)=="boolean" then S.ES.on=data.ES.on end
+                if tonumber(data.ES.md) then S.ES.md=cl(tonumber(data.ES.md),100,ESP_MAX_RANGE) end
+                if tonumber(data.ES.sd) then S.ES.sd=cl(tonumber(data.ES.sd),10,ESP_MAX_RANGE) end
+                if type(data.ES.tc)=="boolean" then S.ES.tc=data.ES.tc end
+                for _,k in ipairs({"name","health","distance","highlight","visibility","tracer","offscreen","skeleton","status","smartCull","distanceFade","healthbar","depthCheck","highlightWall","box","boxFill","targetGlow","chamsFill"}) do if type(data.ES[k])=="boolean" then S.ES[k]=data.ES[k] end end
+                if tonumber(data.ES.updateRate) then S.ES.updateRate=cl(tonumber(data.ES.updateRate),3,30) end
+                if tonumber(data.ES.maxVisible) then S.ES.maxVisible=math.floor(cl(tonumber(data.ES.maxVisible),4,64)+0.5) end
+                if type(data.ES.espAdvancedMode)=="string" then S.ES.espAdvancedMode=tostring(data.ES.espAdvancedMode):upper() end
+                if type(data.ES.espPreset)=="string" then S.ES.espPreset=tostring(data.ES.espPreset):upper() end
+                if type(data.ES.ce)=="table" then local r,g,b=tonumber(data.ES.ce[1]),tonumber(data.ES.ce[2]),tonumber(data.ES.ce[3]); if r and g and b then S.ES.ce=Color3.fromRGB(cl(r,0,255),cl(g,0,255),cl(b,0,255)) end end
+                if type(data.ES.ct)=="table" then local r,g,b=tonumber(data.ES.ct[1]),tonumber(data.ES.ct[2]),tonumber(data.ES.ct[3]); if r and g and b then S.ES.ct=Color3.fromRGB(cl(r,0,255),cl(g,0,255),cl(b,0,255)) end end
+            end
             applySync();applyTheme(STATE.theme);applyLayout(STATE.layout)
             pcall(function() ST.__opsyxProtectionClamp() end)
             if _G.__V94OPSYX_V40_REFRESH then pcall(_G.__V94OPSYX_V40_REFRESH) end
@@ -9794,7 +9840,7 @@ ST.setupV40 = function()
         end
         exportFile = function()
             if type(writefile) ~= "function" then notify("File export unavailable");return end
-            local ok, raw=pcall(function() return HttpService:JSONEncode({version="9.41.1",V40=STATE,KB=S.KB,AM={on=S.AM.on,sm=S.AM.sm,md=S.AM.md,pd=S.AM.pd,tc=S.AM.tc,wc=S.AM.wc,lo=S.AM.lo,targetPart=S.AM.targetPart,priority=S.AM.priority,sticky=S.AM.sticky,stickyMargin=S.AM.stickyMargin,targetLock=S.AM.targetLock,targetSwitching=S.AM.targetSwitching,aliveCheck=S.AM.aliveCheck,sensitivity=S.AM.sensitivity,activationMode=S.AM.activationMode,holdMode=S.AM.holdMode,whiteAsEnemy=S.AM.whiteAsEnemy,strength=S.AM.strength,jitter=S.AM.jitter},ES={name=S.ES.name,health=S.ES.health,distance=S.ES.distance,highlight=S.ES.highlight,visibility=S.ES.visibility,tracer=S.ES.tracer,offscreen=S.ES.offscreen,skeleton=S.ES.skeleton,status=S.ES.status,updateRate=S.ES.updateRate,smartCull=S.ES.smartCull,distanceFade=S.ES.distanceFade,healthbar=S.ES.healthbar,depthCheck=S.ES.depthCheck,highlightWall=S.ES.highlightWall,maxVisible=S.ES.maxVisible,espAdvancedMode=S.ES.espAdvancedMode,espPreset=S.ES.espPreset,box=S.ES.box,boxFill=S.ES.boxFill,targetGlow=S.ES.targetGlow}}) end)
+            local ok, raw=pcall(function() return HttpService:JSONEncode({version="9.41.1",V40=STATE,KB=S.KB,AM={on=S.AM.on,sm=S.AM.sm,md=S.AM.md,pd=S.AM.pd,tc=S.AM.tc,wc=S.AM.wc,lo=S.AM.lo,targetPart=S.AM.targetPart,priority=S.AM.priority,sticky=S.AM.sticky,stickyMargin=S.AM.stickyMargin,targetLock=S.AM.targetLock,targetSwitching=S.AM.targetSwitching,aliveCheck=S.AM.aliveCheck,sensitivity=S.AM.sensitivity,activationMode=S.AM.activationMode,holdMode=S.AM.holdMode,whiteAsEnemy=S.AM.whiteAsEnemy,strength=S.AM.strength,jitter=S.AM.jitter},ES={on=S.ES.on,md=S.ES.md,sd=S.ES.sd,tc=S.ES.tc,ce={math.floor(S.ES.ce.R*255+0.5),math.floor(S.ES.ce.G*255+0.5),math.floor(S.ES.ce.B*255+0.5)},ct={math.floor(S.ES.ct.R*255+0.5),math.floor(S.ES.ct.G*255+0.5),math.floor(S.ES.ct.B*255+0.5)},name=S.ES.name,health=S.ES.health,distance=S.ES.distance,highlight=S.ES.highlight,visibility=S.ES.visibility,tracer=S.ES.tracer,offscreen=S.ES.offscreen,skeleton=S.ES.skeleton,status=S.ES.status,updateRate=S.ES.updateRate,smartCull=S.ES.smartCull,distanceFade=S.ES.distanceFade,healthbar=S.ES.healthbar,depthCheck=S.ES.depthCheck,highlightWall=S.ES.highlightWall,maxVisible=S.ES.maxVisible,espAdvancedMode=S.ES.espAdvancedMode,espPreset=S.ES.espPreset,box=S.ES.box,boxFill=S.ES.boxFill,targetGlow=S.ES.targetGlow,chamsFill=S.ES.chamsFill}}) end)
             if not ok or not raw then notify("Export encode failed");return end
             local okW=pcall(function() writefile("OPSYX_V9_41_Advanced.json",raw) end);notify(okW and "Config exported" or "Export failed")
         end
@@ -10102,6 +10148,7 @@ function _G.__V94OPSYX_CL()
     ST.v39.frameMs=0; ST.v39.frameMsEMA=0; ST.acSignalSeen={}
     ST.arm=false; ST.saArm=false; ST.holdReleased=false; ST.mobArm=false
     ST.htArm=false; ST.tbPending=false; ST.tbPendingAt=0; ST.holdReleaseT=0; aiming=false; ST.saToken = (ST.saToken or 0) + 1
+    cancelKeyRebind()
     cancelActiveDrag()
     ST.espNext = 0
     destroyAllInstanceESP()
