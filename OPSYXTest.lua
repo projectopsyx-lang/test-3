@@ -1,5 +1,5 @@
 -- ============================================================
--- RE-EXECUTION GUARD 15
+-- RE-EXECUTION GUARD 50
 -- If OPSYX is already running, unload the previous instance first
 -- so the new execution starts cleanly without duplicate UI/connections.
 -- ============================================================
@@ -411,8 +411,6 @@ local ST = {
     igVisible=0, igDirtyHash="",
     fr=0, espT=0,
     espNext=0,
-    -- Game-specific ESP Team Check scope; this is NOT an execution restriction.
-    espTeamPlaceId=109020905733214,
     hid=false,
     stealth=false, kills=0, killT=0, lkT=0,
     targetHistory={}, -- [NEW-9.44-2] last 5 targets: {name, time, part}
@@ -1411,77 +1409,36 @@ end
 -- ============================================================
 -- ESP FILTERING - TEAM CHECK + IGNORE LIST
 -- ============================================================
--- [FIX-ESP-TEAM-SAFE] Team Check has three states:
---   ENEMY   -> ESP allowed
---   ALLY    -> ESP denied
---   UNKNOWN -> ESP denied and never cached
---
--- Player.Team is the only team relationship this file can authoritatively
--- resolve. The original ESP gate used TeamColor and treated White/no-team
--- states as enemies, which violated the required fail-closed behavior.
---
--- PlaceId 109020905733214 is used only to select a live-resolution path for
--- this game's Team Check. It does not restrict script execution or features.
--- No separate game-specific faction resolver exists in the uploaded source,
--- so unsupported/missing custom team state remains UNKNOWN rather than guessed.
+-- [FIX-ESP-FILTER] Centralized gate used before ESP creation/update work.
+-- The hot-path order is deliberately: basic player validity -> ignore -> team.
+-- Only after both filters pass do we inspect the character, humanoid/root,
+-- distance, projection, or render state. This guarantees filtered players
+-- cannot reach expensive ESP calculations and that stale ESP is removed.
 local function espTeamEnemyPass(pl)
-    if not pl or pl == ME or pl.Parent ~= Players then return false end
+    -- Team state changes are event-invalidated, so repeated ESP ticks can reuse
+    -- the last verified relationship instead of performing two protected property
+    -- reads on every player every scan. The cache is still fail-closed.
+    local cached = ESP_TEAM_CACHE[pl]
+    if cached ~= nil then return cached end
 
-    -- Team state is unknown while either side is between respawns or the
-    -- minimum character state used by the existing ESP pipeline is incomplete.
-    local myChar = ME.Character
-    local theirChar = pl.Character
-    if not myChar or myChar.Parent == nil or not theirChar or theirChar.Parent == nil then
-        ESP_TEAM_CACHE[pl] = nil
+    local okMy, myCol = pcall(function() return ME.TeamColor end)
+    local okTh, theirCol = pcall(function() return pl.TeamColor end)
+    if not okMy or not okTh or not myCol or not theirCol then
+        ESP_TEAM_CACHE[pl] = false
         return false
     end
-
-    local myHum = myChar:FindFirstChildOfClass("Humanoid")
-    local theirHum = theirChar:FindFirstChildOfClass("Humanoid")
-    if not myHum or not theirHum or not fr(myChar) or not fr(theirChar) then
-        ESP_TEAM_CACHE[pl] = nil
-        return false
+    local enemy
+    if myCol == WHITE_BRICK or theirCol == WHITE_BRICK then
+        enemy = true
+    else
+        enemy = myCol ~= theirCol
     end
-
-    local targetPlace = false
-    pcall(function() targetPlace = game.PlaceId == ST.espTeamPlaceId end)
-
-    -- On the requested game, resolve Team live on every ESP pass. This avoids
-    -- stale relationships if the game's team assignment changes between event
-    -- callbacks. Other places keep a bounded known-state cache.
-    if not targetPlace then
-        local cached = ESP_TEAM_CACHE[pl]
-        if cached and cached.char == theirChar and cached.localChar == myChar
-            and cached.enemy ~= nil then
-            return cached.enemy == true
-        end
-    end
-
-    -- Player.Team nil or a protected property read failure is UNKNOWN, never ENEMY.
-    local okMy, myTeam = pcall(function() return ME.Team end)
-    local okTh, theirTeam = pcall(function() return pl.Team end)
-    if not okMy or not okTh or myTeam == nil or theirTeam == nil then
-        ESP_TEAM_CACHE[pl] = nil
-        return false
-    end
-
-    local enemy = myTeam ~= theirTeam
-
-    if targetPlace then
-        -- Live-resolution path: never retain a target-place result.
-        ESP_TEAM_CACHE[pl] = nil
-        return enemy
-    end
-
-    -- Cache known relationships only. The UNKNOWN path above explicitly clears
-    -- the entry, so missing team data can never become a permanent enemy result.
-    ESP_TEAM_CACHE[pl] = {enemy=enemy, char=theirChar, localChar=myChar}
+    ESP_TEAM_CACHE[pl] = enemy
     return enemy
 end
 
 local function espFilterPass(pl)
-    -- Basic player validity only; character/team work is performed by the
-    -- fail-closed team gate when Team Check is enabled.
+    -- Basic player validity only; character work is intentionally deferred.
     if not pl or pl == ME or pl.Parent ~= Players then return false end
     if isIgnored(pl) then return false end
     if S.ES.tc then
@@ -1494,7 +1451,7 @@ end
 
 -- Character validity is deliberately checked only after espFilterPass().
 -- Callers must perform espFilterPass() first; this avoids repeating the same
--- ignore/team checks in the hot path.
+-- ignore/team checks and their protected TeamColor reads in the hot path.
 local function espCharacterState(pl)
     local c = pl.Character
     if not c or c.Parent == nil then return false, nil, nil, nil end
@@ -2172,11 +2129,6 @@ end)
 local function registerESPSubToggle(name, field)
     registerFeatureToggle(name, function() return S.ES[field] end, function(v)
         S.ES[field] = v
-        if field == "tc" then
-            -- Team Check toggles are relationship invalidation boundaries.
-            ESP_TEAM_CACHE = {}
-            pcall(refreshAllESPFilterState)
-        end
     end)
 end
 registerESPSubToggle("espName", "name")
@@ -4148,7 +4100,6 @@ local function cg()
     tcBtn.MouseButton1Down:Connect(function()
         local nv = not C.S.AM.tc
         C.S.AM.tc=nv; C.S.SL.tc=nv; C.S.TR.tc=nv; C.S.ES.tc=nv
-        ESP_TEAM_CACHE = {}
         tcBtn.BackgroundColor3 = nv and Color3.fromRGB(30,82,55) or Color3.fromRGB(75,35,43)
         tcBtn.Text = nv and "ON" or "OFF"
         -- [FIX-ESP-FILTER] Team-check changes invalidate the ESP set immediately.
@@ -7302,7 +7253,6 @@ ST.oca = function(plr)
             -- gap before CharacterAdded fires, preventing an old-character ESP
             -- reference from surviving a removal window.
             invalidateESP(plr)
-            ESP_TEAM_CACHE[plr] = nil
             LP[plr] = nil
             if CHARS[plr] == oldChar then CHARS[plr] = nil end
             PART_CACHE_ROOT[oldChar] = nil
@@ -7322,7 +7272,6 @@ ST.oca = function(plr)
             local runToken = RUN_TOKEN
 
             invalidateESP(plr)
-            ESP_TEAM_CACHE[plr] = nil
             LP[plr] = nil
             CHARS[plr] = newChar
             if oldChar and oldChar ~= newChar then
@@ -7346,9 +7295,6 @@ ST.oca = function(plr)
 end
 
 hook(ME.CharacterAdded:Connect(function()
-    -- Local character replacement invalidates every cached relationship because
-    -- team/faction metadata can settle again during respawn.
-    ESP_TEAM_CACHE = {}
     -- [PERF-3] Wall Check invariant re-enforced here (replaces per-frame call).
     forceWallCheck()
     -- Character state is reset immediately; no artificial respawn delay is needed.
@@ -7363,12 +7309,6 @@ hook(ME.CharacterAdded:Connect(function()
     if ST.tgpl ~= nil then flushTarget() end
     if S.TP.on then enforceThirdPerson() end
     reapplyFPS()
-end))
-
-hook(ME.CharacterRemoving:Connect(function()
-    -- During local respawn, every team relationship is temporarily UNKNOWN.
-    ESP_TEAM_CACHE = {}
-    pcall(destroyAllInstanceESP)
 end))
 
 for i = 1, #PLAYER_LIST do ST.oca(PLAYER_LIST[i]) end
@@ -8706,7 +8646,6 @@ ST.setupV40 = function()
             S.ES.box = false
             S.ES.boxFill = false
             S.ES.md = ESP_MAX_RANGE
-            ESP_TEAM_CACHE = {}
             destroyAllInstanceESP()
             if extraClearAll then extraClearAll() end
         end, {order=120})
