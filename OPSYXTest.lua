@@ -1,5 +1,5 @@
 -- ============================================================
--- RE-EXECUTION GUARD 27.1
+-- RE-EXECUTION GUARD 15
 -- If OPSYX is already running, unload the previous instance first
 -- so the new execution starts cleanly without duplicate UI/connections.
 -- ============================================================
@@ -411,6 +411,8 @@ local ST = {
     igVisible=0, igDirtyHash="",
     fr=0, espT=0,
     espNext=0,
+    -- Game-specific ESP Team Check scope; this is NOT an execution restriction.
+    espTeamPlaceId=109020905733214,
     hid=false,
     stealth=false, kills=0, killT=0, lkT=0,
     targetHistory={}, -- [NEW-9.44-2] last 5 targets: {name, time, part}
@@ -759,7 +761,6 @@ end
 -- changes and preserves the original targeting fail-open behavior on protected
 -- property-read failures (read failure => enemy).
 local TARGET_TEAM_CACHE = {}
-ESP_TEAM_CACHE = TARGET_TEAM_CACHE
 
 local function addPlayerToList(pl)
     if not pl or pl == ME or PLAYER_INDEX[pl] then return end
@@ -781,28 +782,8 @@ local function removePlayerFromList(pl)
     PLAYER_INDEX[pl] = nil
 end
 
-function ST.__invalidateTeamRelation(pl)
-    if pl then TARGET_TEAM_CACHE[pl] = nil end
-end
-
--- Legacy entry point retained for compatibility. Targeting and ESP now share
--- the same cache, so this invalidates both views at once.
 local function invalidateTargetTeam(pl)
-    ST.__invalidateTeamRelation(pl)
-end
-
-function ST.__clearTeamRelationCache()
-    -- Clear in-place so the existing ESP_TEAM_CACHE/TARGET_TEAM_CACHE aliases
-    -- remain valid. Two-pass deletion preserves executor compatibility.
-    local keys = {}
-    local n = 0
-    for pl in pairs(TARGET_TEAM_CACHE) do
-        n = n + 1
-        keys[n] = pl
-    end
-    for i = 1, n do
-        TARGET_TEAM_CACHE[keys[i]] = nil
-    end
+    if pl then TARGET_TEAM_CACHE[pl] = nil end
 end
 
 local function clearPartCache()
@@ -810,7 +791,7 @@ local function clearPartCache()
     PART_CACHE_HEAD = {}
     HUM_CACHE       = {}
     LOSC            = {}
-    ST.__clearTeamRelationCache()
+    TARGET_TEAM_CACHE = {}
 end
 
 local function clearHeadCache()
@@ -988,101 +969,39 @@ end
 
 -- ============================================================
 -- TEAM CHECK
--- One authoritative resolver is shared by targeting and ESP.
--- Priority: Player.Team -> explicit Player.Neutral -> TeamColor fallback.
--- TeamColor never overrides two usable Team object identities.
--- Fallback/property-error results are never cached as durable state.
+-- [COMPAT-4] TeamColor property reads wrapped in pcall.
+-- On Madium V2, Synapse X, and Script-Ware under some anti-cheat hooks,
+-- accessing TeamColor can throw. Safe fallback: treat as enemy (true),
+-- which is the conservative failure mode - prevents permanently suppressing
+-- targeting when a single property access fails.
 -- ============================================================
 local WHITE_BRICK = BrickColor.new("White")
-
-function ST.__resolveTeamRelation(pl)
-    if pl == nil or pl == ME then return false end
-
-    local whiteAsEnemy = (S.AM.whiteAsEnemy == nil) and true or (S.AM.whiteAsEnemy == true)
-    local cached = TARGET_TEAM_CACHE[pl]
-    if cached then
-        -- Only explicit-neutral results depend on whiteAsEnemy. Normal team
-        -- identity and local-neutral results remain valid until lifecycle events
-        -- explicitly invalidate the shared cache.
-        if cached.mode ~= "NEUTRAL" or cached.whiteAsEnemy == whiteAsEnemy then
-            return cached.enemy == true
-        end
-        TARGET_TEAM_CACHE[pl] = nil
-    end
-
-    -- Read Team and Neutral first. These properties define the real relation.
-    local myTeamOK, myTeam = pcall(function() return ME.Team end)
-    local targetTeamOK, targetTeam = pcall(function() return pl.Team end)
-    local myNeutralOK, myNeutral = pcall(function() return ME.Neutral end)
-    local targetNeutralOK, targetNeutral = pcall(function() return pl.Neutral end)
-
-    if not myTeamOK or not targetTeamOK or not myNeutralOK or not targetNeutralOK then
-        -- Preserve the original conservative targeting behavior, but do not
-        -- poison the shared cache with an error result.
-        return true
-    end
-
-    myNeutral = myNeutral == true
-    targetNeutral = targetNeutral == true
-
-    -- Explicit Neutral wins over color compatibility. This preserves the
-    -- existing whiteAsEnemy policy for genuine no-team/FFA states.
-    if targetNeutral then
-        local enemy = whiteAsEnemy
-        TARGET_TEAM_CACHE[pl] = {enemy=enemy, mode="NEUTRAL", whiteAsEnemy=whiteAsEnemy}
-        return enemy
-    end
-
-    -- A neutral local player has no faction of its own. A non-neutral target
-    -- is therefore an enemy; a neutral target was handled above.
-    if myNeutral then
-        TARGET_TEAM_CACHE[pl] = {enemy=true, mode="LOCAL_NEUTRAL"}
-        return true
-    end
-
-    local myUsable = false
-    local targetUsable = false
-    if myTeam ~= nil then
-        pcall(function() myUsable = myTeam:IsA("Team") and myTeam.Parent ~= nil end)
-    end
-    if targetTeam ~= nil then
-        pcall(function() targetUsable = targetTeam:IsA("Team") and targetTeam.Parent ~= nil end)
-    end
-
-    -- Primary path: Team object identity. This handles different Team objects
-    -- that happen to share the same TeamColor correctly.
-    if myUsable and targetUsable then
-        local enemy = myTeam ~= targetTeam
-        TARGET_TEAM_CACHE[pl] = {
-            enemy=enemy,
-            mode="TEAMS",
-            myTeam=myTeam,
-            targetTeam=targetTeam,
-        }
-        return enemy
-    end
-
-    -- Compatibility fallback for experiences/executor states where Team is nil
-    -- or temporarily unusable while Neutral is false. Do not cache this path:
-    -- Team and TeamColor can update at different moments during a transition.
-    local myColorOK, myColor = pcall(function() return ME.TeamColor end)
-    local targetColorOK, targetColor = pcall(function() return pl.TeamColor end)
-    if not myColorOK or not targetColorOK or not myColor or not targetColor then
-        return true
-    end
-
-    if myColor == WHITE_BRICK or targetColor == WHITE_BRICK then
-        return whiteAsEnemy
-    end
-    return myColor ~= targetColor
-end
-
--- Targeting-facing compatibility wrapper.
 local function isEnemy(pl, teamCheck)
     if pl == ME then return false end
     if teamCheck == nil then teamCheck = S.AM.tc end
     if not teamCheck then return true end
-    return ST.__resolveTeamRelation(pl)
+
+    local cached = TARGET_TEAM_CACHE[pl]
+    if cached ~= nil then return cached end
+
+    local enemy = true
+    local okMy, myCol = pcall(function() return ME.TeamColor end)
+    local okTh, theirCol = pcall(function() return pl.TeamColor end)
+    if okMy and okTh and myCol and theirCol then
+        if myCol == WHITE_BRICK or theirCol == WHITE_BRICK then
+            -- [FIX-9.44-H] White-team symmetry: S.AM.whiteAsEnemy (default true)
+            -- controls whether "no team" (White) players are treated as enemies.
+            -- true  = fail-closed, old behavior (FFA servers, default).
+            -- false = treat White-vs-White as teammates (team-based servers
+            --         where White is the default before teams assign).
+            local wae = (S.AM.whiteAsEnemy == nil) and true or S.AM.whiteAsEnemy
+            enemy = wae
+        else
+            enemy = myCol ~= theirCol
+        end
+    end
+    TARGET_TEAM_CACHE[pl] = enemy
+    return enemy
 end
 
 -- ============================================================
@@ -1492,19 +1411,77 @@ end
 -- ============================================================
 -- ESP FILTERING - TEAM CHECK + IGNORE LIST
 -- ============================================================
--- [FIX-ESP-FILTER] Centralized gate used before ESP creation/update work.
--- The hot-path order is deliberately: basic player validity -> ignore -> team.
--- Only after both filters pass do we inspect the character, humanoid/root,
--- distance, projection, or render state. This guarantees filtered players
--- cannot reach expensive ESP calculations and that stale ESP is removed.
+-- [FIX-ESP-TEAM-SAFE] Team Check has three states:
+--   ENEMY   -> ESP allowed
+--   ALLY    -> ESP denied
+--   UNKNOWN -> ESP denied and never cached
+--
+-- Player.Team is the only team relationship this file can authoritatively
+-- resolve. The original ESP gate used TeamColor and treated White/no-team
+-- states as enemies, which violated the required fail-closed behavior.
+--
+-- PlaceId 109020905733214 is used only to select a live-resolution path for
+-- this game's Team Check. It does not restrict script execution or features.
+-- No separate game-specific faction resolver exists in the uploaded source,
+-- so unsupported/missing custom team state remains UNKNOWN rather than guessed.
 local function espTeamEnemyPass(pl)
-    if pl == nil or pl == ME then return false end
-    if not S.ES.tc then return true end
-    return ST.__resolveTeamRelation(pl)
+    if not pl or pl == ME or pl.Parent ~= Players then return false end
+
+    -- Team state is unknown while either side is between respawns or the
+    -- minimum character state used by the existing ESP pipeline is incomplete.
+    local myChar = ME.Character
+    local theirChar = pl.Character
+    if not myChar or myChar.Parent == nil or not theirChar or theirChar.Parent == nil then
+        ESP_TEAM_CACHE[pl] = nil
+        return false
+    end
+
+    local myHum = myChar:FindFirstChildOfClass("Humanoid")
+    local theirHum = theirChar:FindFirstChildOfClass("Humanoid")
+    if not myHum or not theirHum or not fr(myChar) or not fr(theirChar) then
+        ESP_TEAM_CACHE[pl] = nil
+        return false
+    end
+
+    local targetPlace = false
+    pcall(function() targetPlace = game.PlaceId == ST.espTeamPlaceId end)
+
+    -- On the requested game, resolve Team live on every ESP pass. This avoids
+    -- stale relationships if the game's team assignment changes between event
+    -- callbacks. Other places keep a bounded known-state cache.
+    if not targetPlace then
+        local cached = ESP_TEAM_CACHE[pl]
+        if cached and cached.char == theirChar and cached.localChar == myChar
+            and cached.enemy ~= nil then
+            return cached.enemy == true
+        end
+    end
+
+    -- Player.Team nil or a protected property read failure is UNKNOWN, never ENEMY.
+    local okMy, myTeam = pcall(function() return ME.Team end)
+    local okTh, theirTeam = pcall(function() return pl.Team end)
+    if not okMy or not okTh or myTeam == nil or theirTeam == nil then
+        ESP_TEAM_CACHE[pl] = nil
+        return false
+    end
+
+    local enemy = myTeam ~= theirTeam
+
+    if targetPlace then
+        -- Live-resolution path: never retain a target-place result.
+        ESP_TEAM_CACHE[pl] = nil
+        return enemy
+    end
+
+    -- Cache known relationships only. The UNKNOWN path above explicitly clears
+    -- the entry, so missing team data can never become a permanent enemy result.
+    ESP_TEAM_CACHE[pl] = {enemy=enemy, char=theirChar, localChar=myChar}
+    return enemy
 end
 
 local function espFilterPass(pl)
-    -- Basic player validity only; character work is intentionally deferred.
+    -- Basic player validity only; character/team work is performed by the
+    -- fail-closed team gate when Team Check is enabled.
     if not pl or pl == ME or pl.Parent ~= Players then return false end
     if isIgnored(pl) then return false end
     if S.ES.tc then
@@ -1517,7 +1494,7 @@ end
 
 -- Character validity is deliberately checked only after espFilterPass().
 -- Callers must perform espFilterPass() first; this avoids repeating the same
--- ignore/team checks and their protected TeamColor reads in the hot path.
+-- ignore/team checks in the hot path.
 local function espCharacterState(pl)
     local c = pl.Character
     if not c or c.Parent == nil then return false, nil, nil, nil end
@@ -1810,24 +1787,6 @@ local function refreshAllESPFilterState()
         refreshESPForPlayer(PLAYER_LIST[i])
     end
 end
-
--- Team/Neutral changes must affect both targeting and ESP through one path.
-function ST.__handlePlayerTeamStateChanged(pl)
-    if not pl or pl == ME or pl.Parent ~= Players then return end
-    ST.__invalidateTeamRelation(pl)
-    if ST.tgpl == pl then
-        flushTarget()
-    end
-    if S.ES.on then
-        pcall(refreshESPForPlayer, pl)
-    elseif IESP[pl] then
-        pcall(destroyInstanceESP, pl)
-    end
-end
-
--- Earlier toggle/config code needs an established callback after the ESP module
--- is defined; keeping it on ST avoids introducing more main-scope locals.
-ST.__refreshESPFilterState = refreshAllESPFilterState
 
 local function renameESP(pl)
     local esp = IESP[pl]
@@ -2213,6 +2172,11 @@ end)
 local function registerESPSubToggle(name, field)
     registerFeatureToggle(name, function() return S.ES[field] end, function(v)
         S.ES[field] = v
+        if field == "tc" then
+            -- Team Check toggles are relationship invalidation boundaries.
+            ESP_TEAM_CACHE = {}
+            pcall(refreshAllESPFilterState)
+        end
     end)
 end
 registerESPSubToggle("espName", "name")
@@ -3324,9 +3288,6 @@ ST.__CGCTX = {
     addPlayerToList = addPlayerToList,
     removePlayerFromList = removePlayerFromList,
     invalidateTargetTeam = invalidateTargetTeam,
-    invalidateTeamRelation = ST.__invalidateTeamRelation,
-    clearTeamRelationCache = ST.__clearTeamRelationCache,
-    resolveTeamRelation = ST.__resolveTeamRelation,
     clearPartCache = clearPartCache,
     clearHeadCache = clearHeadCache,
     clearLOSCForChar = clearLOSCForChar,
@@ -4187,8 +4148,7 @@ local function cg()
     tcBtn.MouseButton1Down:Connect(function()
         local nv = not C.S.AM.tc
         C.S.AM.tc=nv; C.S.SL.tc=nv; C.S.TR.tc=nv; C.S.ES.tc=nv
-        C.clearTeamRelationCache()
-        C.flushTarget()
+        ESP_TEAM_CACHE = {}
         tcBtn.BackgroundColor3 = nv and Color3.fromRGB(30,82,55) or Color3.fromRGB(75,35,43)
         tcBtn.Text = nv and "ON" or "OFF"
         -- [FIX-ESP-FILTER] Team-check changes invalidate the ESP set immediately.
@@ -4436,8 +4396,6 @@ local function cg()
         if type(d.KB) == "table" then C.S.KB = sanitizeKeybindTable(d.KB) end
         cp(C.S.AM,d.AM); cp(C.S.SL,d.SL); cp(C.S.TR,d.TR); cp(C.S.ES,d.ES)
         cp(C.S.FV,d.FV); cp(C.S.AC,d.AC); cp(C.S.TP,d.TP); cp(C.S.V39,d.V39); cp(C.S.V40,d.V40)
-        C.clearTeamRelationCache()
-        C.flushTarget()
         if d.V40 then
             if type(C.S.V40.targetPart) == "string" and C.S.V40.targetPart ~= "" then
                 C.S.AM.targetPart = C.S.V40.targetPart
@@ -4994,8 +4952,6 @@ local function cg()
             uiScale=1.0, compactMode=false, uiSpacing=6, transparency=0.03, theme="MIDNIGHT", notify=true,
             layout="STANDARD", runtimePaused=false, suiteVisible=false, autoProfileBackup=true}
         C.S.AM.targetPart="Head"; C.S.AM.priority="CROSSHAIR"; C.S.AM.sticky=true; C.S.AM.stickyMargin=45
-        C.clearTeamRelationCache()
-        C.flushTarget()
         C.S.ES.espPreset="CUSTOM"; C.S.ES.smartCull=true; C.S.ES.distanceFade=true; C.S.ES.healthbar=false; C.S.ES.depthCheck=true
         ST.v39.safeMode=false; ST.v39.safeReason=""; ST.v39.recoveryCount=0; ST.v39.performanceState="BALANCED"
         ST.v39.lastRecoveryName=""; ST.v39.lastRecoveryT=0; ST.v39.overloadScore=0; ST.v39.frameMs=0; ST.v39.frameMsEMA=0
@@ -7332,19 +7288,21 @@ ST.oca = function(plr)
         end
         TEAM_CONNS[plr] = {}
         TEAM_CONNS[plr][1] = plr:GetPropertyChangedSignal("Team"):Connect(function()
-            pcall(ST.__handlePlayerTeamStateChanged, plr)
+            invalidateTargetTeam(plr)
+            ESP_TEAM_CACHE[plr] = nil
+            pcall(refreshESPForPlayer, plr)
         end)
         TEAM_CONNS[plr][2] = plr:GetPropertyChangedSignal("TeamColor"):Connect(function()
-            pcall(ST.__handlePlayerTeamStateChanged, plr)
-        end)
-        TEAM_CONNS[plr][3] = plr:GetPropertyChangedSignal("Neutral"):Connect(function()
-            pcall(ST.__handlePlayerTeamStateChanged, plr)
+            invalidateTargetTeam(plr)
+            ESP_TEAM_CACHE[plr] = nil
+            pcall(refreshESPForPlayer, plr)
         end)
         CHAR_CONNS[plr] = plr.CharacterRemoving:Connect(function(oldChar)
             -- [FIX-ESP-CHAR-REMOVE] CharacterRemoving closes the death/respawn
             -- gap before CharacterAdded fires, preventing an old-character ESP
             -- reference from surviving a removal window.
             invalidateESP(plr)
+            ESP_TEAM_CACHE[plr] = nil
             LP[plr] = nil
             if CHARS[plr] == oldChar then CHARS[plr] = nil end
             PART_CACHE_ROOT[oldChar] = nil
@@ -7364,6 +7322,7 @@ ST.oca = function(plr)
             local runToken = RUN_TOKEN
 
             invalidateESP(plr)
+            ESP_TEAM_CACHE[plr] = nil
             LP[plr] = nil
             CHARS[plr] = newChar
             if oldChar and oldChar ~= newChar then
@@ -7387,6 +7346,9 @@ ST.oca = function(plr)
 end
 
 hook(ME.CharacterAdded:Connect(function()
+    -- Local character replacement invalidates every cached relationship because
+    -- team/faction metadata can settle again during respawn.
+    ESP_TEAM_CACHE = {}
     -- [PERF-3] Wall Check invariant re-enforced here (replaces per-frame call).
     forceWallCheck()
     -- Character state is reset immediately; no artificial respawn delay is needed.
@@ -7403,6 +7365,12 @@ hook(ME.CharacterAdded:Connect(function()
     reapplyFPS()
 end))
 
+hook(ME.CharacterRemoving:Connect(function()
+    -- During local respawn, every team relationship is temporarily UNKNOWN.
+    ESP_TEAM_CACHE = {}
+    pcall(destroyAllInstanceESP)
+end))
+
 for i = 1, #PLAYER_LIST do ST.oca(PLAYER_LIST[i]) end
 -- Close the tiny initialization race where a player can join between the
 -- initial snapshot and the PlayerAdded connection being established.
@@ -7413,22 +7381,17 @@ for _, pl in ipairs(Players:GetPlayers()) do
     end
 end
 
--- [FIX-ESP-FILTER] LocalPlayer Team/TeamColor/Neutral changes affect every
--- relationship. Clear the shared cache and reconcile ESP immediately.
-ST.__handleLocalTeamStateChanged = function()
-    ST.__clearTeamRelationCache()
-    flushTarget()
-    pcall(refreshAllESPFilterState)
-end
-
+-- [FIX-ESP-FILTER] LocalPlayer team changes affect every enemy comparison.
+-- Re-evaluate the whole ESP set immediately rather than waiting for manual toggle.
 hook(ME:GetPropertyChangedSignal("Team"):Connect(function()
-    pcall(ST.__handleLocalTeamStateChanged)
+    ESP_TEAM_CACHE = {}
+    TARGET_TEAM_CACHE = {}
+    pcall(refreshAllESPFilterState)
 end))
 hook(ME:GetPropertyChangedSignal("TeamColor"):Connect(function()
-    pcall(ST.__handleLocalTeamStateChanged)
-end))
-hook(ME:GetPropertyChangedSignal("Neutral"):Connect(function()
-    pcall(ST.__handleLocalTeamStateChanged)
+    ESP_TEAM_CACHE = {}
+    TARGET_TEAM_CACHE = {}
+    pcall(refreshAllESPFilterState)
 end))
 
 hook(Players.PlayerAdded:Connect(function(pl)
@@ -7458,9 +7421,10 @@ end))
 -- ============================================================
 hook(Players.PlayerRemoving:Connect(function(pl)
     removePlayerFromList(pl)
-    ST.__invalidateTeamRelation(pl)
+    invalidateTargetTeam(pl)
     invalidateESP(pl)
     ESP_GEN[pl] = nil
+    ESP_TEAM_CACHE[pl] = nil
     LP[pl]=nil; IGNORE[pl]=nil
     ST._charNilSince[pl] = nil
     -- [FIX-1] Read last known character before clearing, then clean caches.
@@ -8742,6 +8706,7 @@ ST.setupV40 = function()
             S.ES.box = false
             S.ES.boxFill = false
             S.ES.md = ESP_MAX_RANGE
+            ESP_TEAM_CACHE = {}
             destroyAllInstanceESP()
             if extraClearAll then extraClearAll() end
         end, {order=120})
@@ -10079,12 +10044,6 @@ function _G.__V94OPSYX_CL()
     if GUI.advancedSuite then pcall(function() GUI.advancedSuite:Destroy() end); GUI.advancedSuite=nil end
     if type(_G.__V94OPSYX_V40_REFRESH) == "function" then _G.__V94OPSYX_V40_REFRESH=nil end
     _G.__V94OPSYX_V40_CLEANUP=nil
-    ST.__refreshESPFilterState=nil
-    ST.__handlePlayerTeamStateChanged=nil
-    ST.__handleLocalTeamStateChanged=nil
-    ST.__resolveTeamRelation=nil
-    ST.__invalidateTeamRelation=nil
-    ST.__clearTeamRelationCache=nil
     ST.setupEvents=nil
     ST.setupV40=nil
     local connsSnapshot = CONNS
