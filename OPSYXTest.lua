@@ -1,5 +1,5 @@
 -- ============================================================
--- RE-EXECUTION GUARD 27.0
+-- RE-EXECUTION GUARD 27.1
 -- If OPSYX is already running, unload the previous instance first
 -- so the new execution starts cleanly without duplicate UI/connections.
 -- ============================================================
