@@ -1,5 +1,5 @@
 -- ============================================================
--- RE-EXECUTION GUARD 25
+-- RE-EXECUTION GUARD 255
 -- If OPSYX is already running, unload the previous instance first
 -- so the new execution starts cleanly without duplicate UI/connections.
 -- ============================================================
@@ -116,6 +116,8 @@ local SA_LAST     = 0
 -- CAPABILITIES
 -- ============================================================
 local CAP = {d=false, mr=false, ma=false, c1=false, cp=false, cr=false, ia=false}
+local MOUSE_ENABLED = true
+pcall(function() MOUSE_ENABLED = UI.MouseEnabled == true end)
 pcall(function() CAP.d  = type(Drawing)       == "table"    end)
 pcall(function() CAP.mr = type(mousemoverel)  == "function" end)
 pcall(function() CAP.ma = type(mousemoveabs)  == "function" end)
@@ -128,9 +130,7 @@ local function haveMouse()
     -- Executor mouse helpers are capabilities, not proof that the current
     -- Roblox client actually has a mouse. Touch-only devices should retain
     -- the existing center-screen fallback even if helper functions exist.
-    local mouseEnabled = true
-    pcall(function() mouseEnabled = UI.MouseEnabled end)
-    if not mouseEnabled then return false end
+    if not MOUSE_ENABLED then return false end
     if not (CAP.mr or CAP.ma) then return false end
     if CAP.ia then
         local ok, act = pcall(isrbxactive)
@@ -528,6 +528,13 @@ end
 local PILLS = {}
 local CONNS = {}
 local function hook(c) if c then CONNS[#CONNS+1] = c end end
+pcall(function()
+    if UI.GetPropertyChangedSignal then
+        hook(UI:GetPropertyChangedSignal("MouseEnabled"):Connect(function()
+            pcall(function() MOUSE_ENABLED = UI.MouseEnabled == true end)
+        end))
+    end
+end)
 local GUI = {
     sg=nil, uiScale=nil, main=nil, titleLabel=nil, restoreBar=nil, restoreText=nil,
     igPanel=nil, igStatusLbl=nil, igSearch=nil, igSortBtn=nil,
@@ -1637,14 +1644,20 @@ local function createInstanceESP(pl)
         boxFrame.BackgroundColor3 = enemy and S.ES.ce or S.ES.ct
         boxFrame.BorderSizePixel = 0; boxFrame.Visible = S.ES.visibility and S.ES.box
         boxFrame.ZIndex = 1; boxFrame.Parent = bg
-        pcall(function() local st=Instance.new("UIStroke",boxFrame); st.Color=enemy and S.ES.ce or S.ES.ct; st.Thickness=1.1; st.Transparency=S.ES.box and 0.05 or 1 end)
+        local boxStroke
+        pcall(function()
+            boxStroke=Instance.new("UIStroke",boxFrame)
+            boxStroke.Color=enemy and S.ES.ce or S.ES.ct
+            boxStroke.Thickness=1.1
+            boxStroke.Transparency=S.ES.box and 0.05 or 1
+        end)
 
         local hpFill = Instance.new("Frame")
         hpFill.Name = "HPFill"; hpFill.Size = UDim2.new(1,0,1,0); hpFill.BackgroundColor3 = Color3.fromRGB(80,220,120)
         hpFill.BorderSizePixel = 0; hpFill.Parent = hpBack
 
         IESP[pl] = {
-            highlight=hl, billboard=bg, txt1=t1, txt2=t2, hpBack=hpBack, hpFill=hpFill, boxFrame=boxFrame,
+            highlight=hl, billboard=bg, txt1=t1, txt2=t2, hpBack=hpBack, hpFill=hpFill, boxFrame=boxFrame, boxStroke=boxStroke,
             hlN=hlN, bgN=bgN, made=os.clock(), ren=os.clock(),
             char=c, head=head, baseStudsY=ESP_NAME_STUDS_Y, gen=espGeneration(pl),
         }
@@ -7051,8 +7064,6 @@ ST.v39.okLoop, ST.v39.errLoop = pcall(function()
                 purgeStalePredCache()
             end
             pcall(function()
-                local charsChanged = false
-                local changedChars = {}
                 if ST.fcStats then
                     local pc = #PLAYER_LIST
                     if pc>(ST.fcStats.maxPlayers or 0) then ST.fcStats.maxPlayers=pc end
@@ -7061,9 +7072,13 @@ ST.v39.okLoop, ST.v39.errLoop = pcall(function()
                 local rngL = (ST.stealth and S.AC.cl) and S.ES.sd or S.ES.md
                 local espCam = CAM()
                 local espCamPos = espCam and espCam.CFrame.Position or nil
-                local espRank = {}
+                local espRank = ST.espRank or {}; ST.espRank = espRank
+                for pl in pairs(espRank) do espRank[pl] = nil end
+                local rankList = ST.espRankList or {}; ST.espRankList = rankList
+                local rankItems = ST.espRankItems or {}; ST.espRankItems = rankItems
+                local rankCount = 0
                 if S.ES.on and S.ES.smartCull and espCamPos then
-                    local rankList = {}
+                    local cap = math.floor(cl(tonumber(S.ES.maxVisible) or 32, 4, 64) + 0.5)
                     for i = 1, #PLAYER_LIST do
                         local pl = PLAYER_LIST[i]
                         if pl ~= ME and espFilterPass(pl) then
@@ -7071,47 +7086,46 @@ ST.v39.okLoop, ST.v39.errLoop = pcall(function()
                             if valid and c and hum and rt then
                                 local okD,dist = pcall(function() return (espCamPos-rt.Position).Magnitude end)
                                 if okD and dist <= rngL then
-                                    rankList[#rankList+1] = {pl=pl,c=c,hum=hum,rt=rt,dist=dist}
-                                end
-                            end
-                        end
-                    end
-                    local cap = math.floor(cl(tonumber(S.ES.maxVisible) or 32, 4, 64) + 0.5)
-                    -- Keep only the nearest `cap` entries instead of sorting every eligible
-                    -- player. This avoids O(n log n) work on dense servers and is especially
-                    -- helpful on low-end CPUs where LOW/ULTRA LOW use small caps.
-                    if #rankList > cap then
-                        local top = {}
-                        for ri = 1, #rankList do
-                            local item = rankList[ri]
-                            local insertAt = #top + 1
-                            if #top == cap and item.dist >= top[#top].dist then
-                                insertAt = nil
-                            else
-                                for ti = 1, #top do
-                                    if item.dist < top[ti].dist then
-                                        insertAt = ti
-                                        break
-                                    end
-                                end
-                                if insertAt then
-                                    if #top < cap then
-                                        table.insert(top, insertAt, item)
+                                    local item = rankItems[pl]
+                                    if not item then item={}; rankItems[pl]=item end
+                                    item.pl=pl; item.c=c; item.hum=hum; item.rt=rt; item.dist=dist
+                                    local insertAt = rankCount + 1
+                                    if rankCount >= cap and dist >= (rankList[rankCount].dist or math.huge) then
+                                        insertAt = nil
                                     else
-                                        table.insert(top, insertAt, item)
-                                        table.remove(top)
+                                        for ti = 1, rankCount do
+                                            if dist < rankList[ti].dist then
+                                                insertAt = ti
+                                                break
+                                            end
+                                        end
+                                        if insertAt then
+                                            local newCount = math.min(rankCount + 1, cap)
+                                            local j = newCount
+                                            while j > insertAt do
+                                                rankList[j] = rankList[j - 1]
+                                                j = j - 1
+                                            end
+                                            rankList[insertAt] = item
+                                            rankCount = newCount
+                                        end
+                                    end
+                                    if rankCount < cap and insertAt == rankCount + 1 then
+                                        rankCount = rankCount + 1
+                                        rankList[rankCount] = item
                                     end
                                 end
                             end
-                            if #top < cap and insertAt == #top + 1 then
-                                top[#top + 1] = item
-                            end
                         end
-                        for ri = 1, #top do espRank[top[ri].pl] = top[ri] end
-                    else
-                        for i = 1, #rankList do espRank[rankList[i].pl] = rankList[i] end
                     end
+                    for i = rankCount + 1, #rankList do rankList[i] = nil end
+                    for i = 1, rankCount do espRank[rankList[i].pl] = rankList[i] end
+                else
+                    for i = 1, #rankList do rankList[i] = nil end
                 end
+                local changedChars = ST.espChangedChars or {}; ST.espChangedChars = changedChars
+                for i = 1, #changedChars do changedChars[i] = nil end
+                local charsChanged = false
                 if S.ES.on and not MASTER_UI_HIDDEN and not ST.v39.safeMode and espCam then
                     for i = 1, #PLAYER_LIST do
                         local pl = PLAYER_LIST[i]
@@ -7214,7 +7228,7 @@ ST.v39.okLoop, ST.v39.errLoop = pcall(function()
                                                         if esp.boxFrame then
                                                             esp.boxFrame.Visible = S.ES.box and S.ES.visibility
                                                             esp.boxFrame.BackgroundTransparency = S.ES.boxFill and 0.82 or 1
-                                                            local bst=esp.boxFrame:FindFirstChildOfClass("UIStroke")
+                                                            local bst=esp.boxStroke
                                                             if bst then bst.Transparency = S.ES.box and 0.05 or 1; bst.Color = (hum and hpColor(hum)) or UI_ACCENT end
                                                         end
                                                         if esp.highlight then
@@ -7505,6 +7519,9 @@ hook(Players.PlayerRemoving:Connect(function(pl)
     -- invalidation so high-churn servers cannot grow ESP_GEN without bound.
     ESP_GEN[pl] = nil
     ESP_TEAM_CACHE[pl] = nil
+    if ST.espRankItems then ST.espRankItems[pl] = nil end
+    if ST.espRank then ST.espRank[pl] = nil end
+    if ST.espExtraActive then ST.espExtraActive[pl] = nil end
     LP[pl]=nil; IGNORE[pl]=nil
     ST._charNilSince[pl] = nil
     -- [FIX-1] Read last known character before clearing, then clean caches.
@@ -9734,7 +9751,8 @@ ST.setupV40 = function()
             lastExtra=now
             local cam=CAM();if not cam then return end
             local myRoot=ME.Character and fr(ME.Character)
-            local active={}
+            local active=ST.espExtraActive or {}; ST.espExtraActive=active
+            for pl in pairs(active) do active[pl]=nil end
             for i=1,#PLAYER_LIST do
                 local pl=PLAYER_LIST[i]
                 if pl and espFilterPass(pl) and (not S.ES.smartCull or IESP[pl] ~= nil) then
@@ -9772,7 +9790,9 @@ ST.setupV40 = function()
                             if a2 then a2.From=tip;a2.To=b;a2.Color=UI_TEXT_PRIMARY;a2.Visible=true end
                             if a3 then a3.From=a;a3.To=b;a3.Color=UI_TEXT_PRIMARY;a3.Visible=true end
                         else
-                            for _,k in ipairs({"a1","a2","a3"}) do if pack[k] then pack[k].Visible=false end end
+                            if pack.a1 then pack.a1.Visible=false end
+                            if pack.a2 then pack.a2.Visible=false end
+                            if pack.a3 then pack.a3.Visible=false end
                         end
                     end
                 end
@@ -9997,10 +10017,15 @@ ST.setupV40 = function()
             if not ST.ld then return end
             nowUi = tonumber(nowUi) or os.clock()
 
-            -- Crosshair must hide immediately when paused/hidden/off/safe.
-            pcall(updateCrosshair)
+            -- Crosshair stays frame-responsive while active. When it is off,
+            -- there is no per-frame work; settings/visibility changes already
+            -- call the refresh path that hides it immediately.
+            if STATE.crosshair == true or crosshairWasVisible then
+                pcall(updateCrosshair)
+            end
 
-            local extrasAllowed = CAP.d and S.ES.on and S.ES.visibility
+            local extrasConfigured = S.ES.tracer or S.ES.status or S.ES.skeleton or S.ES.offscreen
+            local extrasAllowed = CAP.d and extrasConfigured and S.ES.on and S.ES.visibility
                 and not MASTER_UI_HIDDEN and not ST.v39.safeMode
                 and not STATE.runtimePaused
             if extrasAllowed then
@@ -10213,6 +10238,11 @@ function _G.__V94OPSYX_CL()
     clearPartCache(); flushTarget()
     for i = 1, #PLAYER_LIST do PLAYER_INDEX[PLAYER_LIST[i]] = nil end
     PLAYER_LIST = {}
+    ST.espRankItems = {}
+    ST.espRank = {}
+    ST.espRankList = {}
+    ST.espChangedChars = {}
+    ST.espExtraActive = {}
     ST.v39.cleanupState = "COMPLETE"
     v39Log("CLEANUP", "complete")
     _G.__V94OPSYX_LD = nil; _G.__V94OPSYX_CL = nil
